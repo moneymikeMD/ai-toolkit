@@ -1,0 +1,37 @@
+name: comment-lint
+description: Fail a build when comments run longer than the project's comment rule allows.
+author: Mike Garrett
+
+inputs:
+  max-header:
+    description: Maximum comment lines in a file header, which documents usage and flags.
+    required: false
+    default: "80"
+  max-block:
+    description: Maximum lines in any comment run below the header.
+    required: false
+    default: "4"
+  path:
+    description: File or directory to check. Defaults to every file git tracks in the caller's checkout.
+    required: false
+    default: ""
+  report-only:
+    description: Report violations without failing the build. Use while a repo still has a backlog.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -uo pipefail
+        args=(--max-header "${{ inputs.max-header }}" --max-block "${{ inputs.max-block }}")
+        [ -n "${{ inputs.path }}" ] && args+=("${{ inputs.path }}")
+        python3 "${{ github.action_path }}/comment-lint.py" "${args[@]}"
+        status=$?
+        if [ "${{ inputs.report-only }}" = "true" ] && [ "$status" -ne 0 ]; then
+          echo "::notice::comment-lint found violations; report-only is set, not failing the build"
+          exit 0
+        fi
+        exit "$status"

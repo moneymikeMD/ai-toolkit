@@ -1,0 +1,36 @@
+name: comment-lint
+
+on:
+  workflow_call:
+    inputs:
+      max-header:
+        type: string
+        required: false
+        default: "80"
+      max-block:
+        type: string
+        required: false
+        default: "4"
+      path:
+        type: string
+        required: false
+        default: ""
+      report-only:
+        type: string
+        required: false
+        default: "false"
+
+jobs:
+  comment-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A reusable workflow's `uses: ./path` resolves against the CALLER's
+      # checkout, not this repo, so the action is referenced by full ref.
+      # Move this to @v1 when the tag is cut.
+      - uses: moneymikeMD/ai-toolkit/actions/comment-lint@main
+        with:
+          max-header: ${{ inputs.max-header }}
+          max-block: ${{ inputs.max-block }}
+          path: ${{ inputs.path }}
+          report-only: ${{ inputs.report-only }}
