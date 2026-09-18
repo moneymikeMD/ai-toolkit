@@ -24,7 +24,7 @@ jobs:
   comment-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # A reusable workflow's `uses: ./path` resolves against the CALLER's
       # checkout, not this repo, so the action is referenced by full ref.
       # Move this to @v1 when the tag is cut.
