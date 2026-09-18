@@ -101,8 +101,13 @@ negative lived in the same place.
 ## How this repo is worked
 
 `main` is protected: pull request required, `selftest` and `self-lint` must
-pass, force-push and deletion blocked. An outside contributor's PR needs an
-approving review; the owner bypasses that and merges their own PRs directly.
+pass, force-push and deletion blocked. No approving review is required.
+
+That is deliberate, not an oversight. An outside contributor cannot merge
+here regardless — they have no write access — so a review requirement would
+not be what gates them. What it would do is block Dependabot's auto-merge,
+which waits on every merge requirement including reviews. If a collaborator
+with write access is ever added, revisit it.
 
 Dependabot watches the `github-actions` ecosystem weekly. Patch and minor
 bumps auto-merge once the required checks pass; majors wait for a human.
