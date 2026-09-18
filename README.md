@@ -33,13 +33,13 @@ writes Markdown from a heredoc is not commenting.
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: moneymikeMD/ai-toolkit/actions/comment-lint@main
+- uses: moneymikeMD/ai-toolkit/actions/comment-lint@v1
 ```
 
 With options:
 
 ```yaml
-- uses: moneymikeMD/ai-toolkit/actions/comment-lint@main
+- uses: moneymikeMD/ai-toolkit/actions/comment-lint@v1
   with:
     max-block: "4"
     report-only: "true"   # count violations without failing the build
@@ -50,7 +50,7 @@ With options:
 ```yaml
 jobs:
   comment-lint:
-    uses: moneymikeMD/ai-toolkit/.github/workflows/comment-lint.yml@main
+    uses: moneymikeMD/ai-toolkit/.github/workflows/comment-lint.yml@v1
     with:
       report-only: "true"
 ```
