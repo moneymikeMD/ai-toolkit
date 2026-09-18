@@ -27,8 +27,7 @@ jobs:
       - uses: actions/checkout@v7
       # A reusable workflow's `uses: ./path` resolves against the CALLER's
       # checkout, not this repo, so the action is referenced by full ref.
-      # Move this to @v1 when the tag is cut.
-      - uses: moneymikeMD/ai-toolkit/actions/comment-lint@main
+      - uses: moneymikeMD/ai-toolkit/actions/comment-lint@v1
         with:
           max-header: ${{ inputs.max-header }}
           max-block: ${{ inputs.max-block }}
