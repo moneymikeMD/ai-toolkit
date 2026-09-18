@@ -79,11 +79,37 @@ still passing. Strip comments from both versions and diff what is left.
 
 ## Versioning
 
-Consumers pin a major tag. Because a consumer may have this as a *required*
-check, a tag that moves is load-bearing for someone else's main branch: a
-broken tag reddens their build immediately. So a tag only advances after this
-repo's own CI is green, the selftest passes, and the linter has been run
-against a heredoc-heavy repository with the result read by a person.
+Consumers pin a major tag (`@v1`). `release-please` maintains `CHANGELOG.md`
+and cuts the exact semver tag from Conventional Commits; a second job
+repoints the major tag at each release, because release-please itself only
+creates the exact version.
+
+**The release PR is the human gate, and it is the only one.** Because a
+consumer may have this repo's action as a *required* check, a moving major
+tag is load-bearing for someone else's main branch — a broken tag reddens
+their build immediately. Merging the release PR is therefore a deliberate
+act, not a rubber stamp. Before merging one:
+
+- this repo's CI is green, including the selftest
+- the linter has been run against a heredoc-heavy repository and the output
+  read by a person, not just observed to exit zero
+
+That second check exists because every false positive seen so far came from
+a file that writes Markdown or config from a heredoc, and the one false
+negative lived in the same place.
+
+## How this repo is worked
+
+`main` is protected: pull request required, `selftest` and `self-lint` must
+pass, force-push and deletion blocked. An outside contributor's PR needs an
+approving review; the owner bypasses that and merges their own PRs directly.
+
+Dependabot watches the `github-actions` ecosystem weekly. Patch and minor
+bumps auto-merge once the required checks pass; majors wait for a human.
+There are no package dependencies to watch — `comment-lint.py` is stdlib
+only.
+
+`CHANGELOG.md` is generated. Do not edit it by hand.
 
 `comment-lint.py` originated in
 [night-watchman](https://github.com/moneymikeMD/night-watchman) and was seeded
