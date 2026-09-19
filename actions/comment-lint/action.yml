@@ -24,13 +24,21 @@ runs:
   using: composite
   steps:
     - shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_MAX_HEADER: ${{ inputs.max-header }}
+        INPUT_MAX_BLOCK: ${{ inputs.max-block }}
+        INPUT_REPORT_ONLY: ${{ inputs.report-only }}
       run: |
         set -uo pipefail
-        args=(--max-header "${{ inputs.max-header }}" --max-block "${{ inputs.max-block }}")
-        [ -n "${{ inputs.path }}" ] && args+=("${{ inputs.path }}")
-        python3 "${{ github.action_path }}/comment-lint.py" "${args[@]}"
-        status=$?
-        if [ "${{ inputs.report-only }}" = "true" ] && [ "$status" -ne 0 ]; then
+        args=(--max-header "$INPUT_MAX_HEADER" --max-block "$INPUT_MAX_BLOCK")
+        [ -n "$INPUT_PATH" ] && args+=("$INPUT_PATH")
+        if python3 "${{ github.action_path }}/comment-lint.py" "${args[@]}"; then
+          status=0
+        else
+          status=$?
+        fi
+        if [ "$INPUT_REPORT_ONLY" = "true" ] && [ "$status" -ne 0 ]; then
           echo "::notice::comment-lint found violations; report-only is set, not failing the build"
           exit 0
         fi
