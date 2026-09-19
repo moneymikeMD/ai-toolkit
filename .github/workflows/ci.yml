@@ -11,6 +11,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: ./actions/comment-lint/comment-lint-selftest.sh
+      - run: ./scripts/git-retry-selftest.sh
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: shellcheck -S warning scripts/*.sh actions/*/*.sh
 
   self-lint:
     runs-on: ubuntu-latest
