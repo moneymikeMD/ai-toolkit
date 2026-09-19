@@ -119,3 +119,7 @@ only.
 `comment-lint.py` originated in
 [night-watchman](https://github.com/moneymikeMD/night-watchman) and was seeded
 here from `89e64b0`.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
