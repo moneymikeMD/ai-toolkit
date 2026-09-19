@@ -109,6 +109,37 @@ It is a script rather than an action on purpose: the failure it addresses
 happens on developer and agent machines, not in CI, where the runner already
 has its own retry behaviour.
 
+## pr-land
+
+Merges a PR, but only after checking the base branch's actual required
+status checks against the actual check-runs on the PR's head SHA — not from
+memory, which has been wrong twice in one hour.
+
+```bash
+scripts/pr-land.sh 42
+scripts/pr-land.sh 42 --repo owner/repo
+scripts/pr-land.sh 42 --dry-run
+```
+
+The decision, in order: every required context present and successful is a
+plain squash merge; any required context present and failed, cancelled or
+timed out is a refusal, naming which one; required contexts absent **and**
+the PR authored by a bot is a squash merge with `--admin`; anything else —
+pending, or partially absent on a human PR — is a refusal.
+
+**`--admin` is derived, never a parameter.** A bot-authored PR (for example,
+a release-please PR running on `GITHUB_TOKEN`) triggers a workflow run that
+GitHub never actually executes: zero jobs, zero check-runs, and the required
+contexts are permanently *absent* rather than failed. `--admin` is the only
+way past that, and the script reasons its way there instead of a caller
+asking for it — a caller cannot use this script to bypass a check that
+actually failed.
+
+**The PR's state is always read back after a merge attempt**, and the exit
+code depends on that read, not on the merge command's own exit status. A
+classifier denial is not proof a merge did not happen — an already-merged PR
+has returned a denial after the fact — so the read-back is unconditional.
+
 ## Versioning
 
 Consumers pin a major tag (`@v1`). `release-please` maintains `CHANGELOG.md`
