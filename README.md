@@ -77,6 +77,38 @@ a header there silently truncates the help text.
 pass that drops a `set -euo pipefail` by an off-by-one can leave every test
 still passing. Strip comments from both versions and diff what is left.
 
+## git-retry
+
+Runs a git command and retries **only** transient network failures. For callers
+that run several git operations at once, where a dropped connection is common
+and a retry a second later usually succeeds.
+
+```bash
+scripts/git-retry.sh push -u origin my-branch
+scripts/git-retry.sh fetch --prune origin
+GIT_RETRY_ATTEMPTS=5 GIT_RETRY_BASE_DELAY=3 scripts/git-retry.sh push origin main
+```
+
+A rejected ref, a merge conflict or a bad path fails immediately. Only
+transport errors are retried, and git's own exit code and output are passed
+through unchanged.
+
+**Why it matches stderr rather than the exit code.** git exits 128 for every
+fatal error, so the exit code cannot tell "the connection dropped" from "you
+are not allowed to push that". Matching the message is the only way to
+distinguish them, which also means the pattern list is the thing to extend when
+a new transport error shows up.
+
+**Why the backoff has jitter.** The failure this exists for is bursty — several
+callers failing at the same moment because they opened connections at the same
+moment. Retrying instantly from all of them recreates the burst, so each
+attempt waits longer, with a small per-process offset so they do not
+resynchronise.
+
+It is a script rather than an action on purpose: the failure it addresses
+happens on developer and agent machines, not in CI, where the runner already
+has its own retry behaviour.
+
 ## Versioning
 
 Consumers pin a major tag (`@v1`). `release-please` maintains `CHANGELOG.md`
