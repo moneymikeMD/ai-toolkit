@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.0.1...v1.1.0) (2026-09-19)
+
+
+### Features
+
+* **git-retry:** retry only transient git network failures ([#14](https://github.com/moneymikeMD/ai-toolkit/issues/14)) ([47934c9](https://github.com/moneymikeMD/ai-toolkit/commit/47934c993a7adff58aacbe75ec09ab6e9bfacc7d))
+
 ## [1.0.1](https://github.com/moneymikeMD/ai-toolkit/compare/v1.0.0...v1.0.1) (2026-09-19)
 
 
