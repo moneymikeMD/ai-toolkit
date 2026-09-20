@@ -262,6 +262,23 @@ afterward and the script fails unless the read-back SHA matches the
 intended commit — a push reporting success has not always meant the tag
 actually moved.
 
+## release MCP server
+
+`.mcp.json` in this repo registers a stdio MCP server (`release`, sourced
+from a private dotfiles repo's `dot_claude/mcp/release/`) exposing four
+tools: `pr_land`, `release_publish`, `tag_major`, `checks`. It is a
+dispatcher, not a second implementation — every tool call execs the script
+above (or `gh pr checks`) that already owns the behaviour, so it holds no
+release logic of its own.
+
+The point is analytics granularity, not a new capability: a call through
+this repo's own scripts stays inside one `Bash` bucket in tool-call
+telemetry, while an MCP tool call arrives under its own name. No tool takes
+a bypass flag, and none reaches an action its underlying script cannot.
+
+Enabled here only, not globally — see the server's own README for the
+registration snippet and how to run its selftest.
+
 ## Versioning
 
 Consumers pin a major tag (`@v1`). `release-please` maintains `CHANGELOG.md`
