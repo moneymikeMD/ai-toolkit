@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.1.0...v1.2.0) (2026-09-20)
+
+
+### Features
+
+* **pr-land:** merge a PR behind a required-check gate ([#17](https://github.com/moneymikeMD/ai-toolkit/issues/17)) ([f717cae](https://github.com/moneymikeMD/ai-toolkit/commit/f717cae25dc31472eab326c4025b9be676c9f219))
+
 ## [1.1.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.0.1...v1.1.0) (2026-09-19)
 
 
