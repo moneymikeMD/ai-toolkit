@@ -183,6 +183,58 @@ reading its state back afterward is reported refused, regardless of what
 It does not resolve a conflict; it turns a silent, discovered-late pile-up
 of PRs into immediate, serialized, one-at-a-time refusals.
 
+## release-publish
+
+Publishes a release-please release end to end: checks the open PR against
+the level you asked for, merges it through `pr-land.sh`, waits for the
+resulting release and CI, then repoints the floating major tag through
+`tag-major.sh`. What used to be six manual steps, each individually
+verifiable and none of them written down.
+
+```bash
+scripts/release-publish.sh minor
+scripts/release-publish.sh patch --repo owner/repo
+scripts/release-publish.sh major --i-am-the-owner
+scripts/release-publish.sh minor --dry-run
+```
+
+Run from inside the target repo's checkout — it reads
+`.release-please-manifest.json` there to know the current version.
+
+**A major release is refused without `--i-am-the-owner`.** Majors remain
+the owner's call; that boundary is enforced in code, not left as a
+sentence in a handoff document a wave agent never reads.
+
+**More than one open release-please PR is a refusal, not a guess.** A
+sibling package's release PR can be open at the same time, and merging
+one leaves the other DIRTY against the shared manifest file until
+release-please's own bot catches up. Pass `--pr NUMBER` to say which one.
+
+**The merge itself is `pr-land.sh`'s job.** This script only decides
+*whether* to publish; the required-check gate has one implementation, not
+two that can drift apart.
+
+## tag-major
+
+Repoints the floating major tag (`v1`) onto the newest real version tag
+(`v1.2.3`) — the one step release-please does not take on its own.
+
+```bash
+scripts/tag-major.sh
+scripts/tag-major.sh --repo owner/repo
+scripts/tag-major.sh --dry-run
+```
+
+**A real version tag is never the thing that moves.** Only the floating
+major is re-pointed; a genuine `vX.Y.Z` tag is refused as a target even if
+something asks for it — that guard is the reason this script exists.
+
+**The move goes through the GitHub Git Data API, not a local push**, so
+it needs no checkout at all once `--repo` is known. The ref is read back
+afterward and the script fails unless the read-back SHA matches the
+intended commit — a push reporting success has not always meant the tag
+actually moved.
+
 ## Versioning
 
 Consumers pin a major tag (`@v1`). `release-please` maintains `CHANGELOG.md`
