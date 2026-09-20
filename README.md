@@ -279,6 +279,16 @@ a bypass flag, and none reaches an action its underlying script cannot.
 Enabled here only, not globally — see the server's own README for the
 registration snippet and how to run its selftest.
 
+The server path is written `${HOME}/.claude/mcp/release/server.js`.
+`.mcp.json` expands `${VAR}` and `${VAR:-default}` in `command`, `args`, `env`,
+`url` and `headers`, so no absolute home directory belongs in it. An unset
+variable is left unexpanded and warned about rather than failing the load, so a
+checkout on a machine without the server simply has no `release` tool.
+
+`no-personal-paths` in CI enforces the rule at the top of this file: a tracked
+file naming `/Users/<name>` or `/home/<name>` fails the build. `CHANGELOG.md` is
+exempt because it is generated from commit messages.
+
 ## Versioning
 
 Consumers pin a major tag (`@v1`). `release-please` maintains `CHANGELOG.md`

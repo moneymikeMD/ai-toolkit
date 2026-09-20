@@ -17,6 +17,20 @@ jobs:
             "$t"
           done
 
+  no-personal-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # This repo is public. An absolute home directory names a person and,
+      # in a config like .mcp.json, resolves nowhere on any other machine.
+      - run: |
+          if git ls-files -z | grep -zv '^CHANGELOG\.md$' \
+             | xargs -0 grep -nIE '/(Users|home)/[A-Za-z0-9._-]+'; then
+            echo "::error::tracked file(s) above name a personal home directory; use \${HOME}" >&2
+            exit 1
+          fi
+          echo "no personal paths in tracked files"
+
   shellcheck:
     runs-on: ubuntu-latest
     steps:

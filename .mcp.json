@@ -2,7 +2,7 @@
   "mcpServers": {
     "release": {
       "command": "node",
-      "args": ["/Users/michaelgarrett/.claude/mcp/release/server.js"]
+      "args": ["${HOME}/.claude/mcp/release/server.js"]
     }
   }
 }
