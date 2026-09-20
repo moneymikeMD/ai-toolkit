@@ -24,7 +24,8 @@ check() {
 
 # fake_gh — writes a gh stand-in once. It answers every call this script's
 # decision path makes by reading the PRLAND_STUB_* variables a test sets, so
-# one binary serves every scenario below.
+# one binary serves every scenario below. Successive PR reads walk
+# PRLAND_STUB_MERGE_STATES line by line, so an UNKNOWN can settle.
 fake_gh() {
     mkdir -p "$WORK/bin"
     cat > "$WORK/bin/gh" <<'STUB'
@@ -35,14 +36,20 @@ echo "$n" > "$count_file"
 
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
     case "$*" in
-        *"--json state"*)
+        *"--json state --jq"*)
             echo "$PRLAND_STUB_FINAL_STATE"
             exit 0
             ;;
     esac
-    printf '%s\t%s\t%s\t%s\t%s\n' \
+    pos_file="$PRLAND_STUB_VIEW_POS"
+    p=$(( $(cat "$pos_file" 2>/dev/null || echo 0) + 1 ))
+    echo "$p" > "$pos_file"
+    merge_state="$(printf '%s\n' "$PRLAND_STUB_MERGE_STATES" | sed -n "${p}p")"
+    [ -z "$merge_state" ] && merge_state="$(printf '%s\n' "$PRLAND_STUB_MERGE_STATES" | tail -n1)"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$PRLAND_STUB_BASE" "$PRLAND_STUB_SHA" "$PRLAND_STUB_IS_BOT" \
-        "$PRLAND_STUB_LOGIN" "$PRLAND_STUB_PR_STATE"
+        "$PRLAND_STUB_LOGIN" "$PRLAND_STUB_PR_STATE" "$merge_state" \
+        "$PRLAND_STUB_REVIEW"
     exit 0
 fi
 
@@ -88,29 +95,35 @@ STUB
     chmod +x "$WORK/bin/gh"
 }
 
-# reset_scenario — a green, human-authored, fully-present baseline that each
-# test overrides just the fields it cares about, so an unrelated addition
-# above never has to touch every case below it.
+# reset_scenario — a green, human-authored, fully-present, review-satisfied
+# baseline that each test overrides just the fields it cares about, so an
+# unrelated addition above never has to touch every case below it.
 reset_scenario() {
     PRLAND_STUB_COUNTFILE="$WORK/count"
     PRLAND_STUB_MERGE_LOG="$WORK/merge.log"
+    PRLAND_STUB_VIEW_POS="$WORK/view.pos"
     : > "$PRLAND_STUB_COUNTFILE"
     : > "$PRLAND_STUB_MERGE_LOG"
+    : > "$PRLAND_STUB_VIEW_POS"
     PRLAND_STUB_REPO_NAMEWITHOWNER="test-owner/test-repo"
     PRLAND_STUB_BASE="main"
     PRLAND_STUB_SHA="deadbeef"
     PRLAND_STUB_IS_BOT="false"
     PRLAND_STUB_LOGIN="octocat"
     PRLAND_STUB_PR_STATE="OPEN"
+    PRLAND_STUB_MERGE_STATES="CLEAN"
+    PRLAND_STUB_REVIEW=""
     PRLAND_STUB_REQUIRED=""
     PRLAND_STUB_CHECKRUNS=""
     PRLAND_STUB_MERGE_EXIT="0"
     PRLAND_STUB_MERGE_STDERR=""
     PRLAND_STUB_FINAL_STATE="MERGED"
-    export PRLAND_STUB_COUNTFILE PRLAND_STUB_MERGE_LOG PRLAND_STUB_REPO_NAMEWITHOWNER \
-        PRLAND_STUB_BASE PRLAND_STUB_SHA PRLAND_STUB_IS_BOT PRLAND_STUB_LOGIN \
-        PRLAND_STUB_PR_STATE PRLAND_STUB_REQUIRED PRLAND_STUB_CHECKRUNS \
-        PRLAND_STUB_MERGE_EXIT PRLAND_STUB_MERGE_STDERR PRLAND_STUB_FINAL_STATE
+    export PRLAND_STUB_COUNTFILE PRLAND_STUB_MERGE_LOG PRLAND_STUB_VIEW_POS \
+        PRLAND_STUB_REPO_NAMEWITHOWNER PRLAND_STUB_BASE PRLAND_STUB_SHA \
+        PRLAND_STUB_IS_BOT PRLAND_STUB_LOGIN PRLAND_STUB_PR_STATE \
+        PRLAND_STUB_MERGE_STATES PRLAND_STUB_REVIEW PRLAND_STUB_REQUIRED \
+        PRLAND_STUB_CHECKRUNS PRLAND_STUB_MERGE_EXIT PRLAND_STUB_MERGE_STDERR \
+        PRLAND_STUB_FINAL_STATE
 }
 
 run_sut() {
@@ -118,6 +131,7 @@ run_sut() {
     echo $?
 }
 merge_calls() { wc -l < "$PRLAND_STUB_MERGE_LOG" | tr -d ' '; }
+admin_calls() { grep -c -- '--admin' "$PRLAND_STUB_MERGE_LOG"; }
 
 fake_gh
 
@@ -129,7 +143,7 @@ export PRLAND_STUB_REQUIRED PRLAND_STUB_CHECKRUNS
 rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo)"
 check "required-green: exits 0" 0 "$rc"
 check "required-green: merges exactly once" 1 "$(merge_calls)"
-check "required-green: never uses --admin" 0 "$(grep -c -- '--admin' "$PRLAND_STUB_MERGE_LOG")"
+check "required-green: never uses --admin" 0 "$(admin_calls)"
 
 # required-failed: a required context genuinely failed, must never bypass it.
 reset_scenario
@@ -149,7 +163,7 @@ PRLAND_STUB_LOGIN="github-actions[bot]"
 export PRLAND_STUB_REQUIRED PRLAND_STUB_IS_BOT PRLAND_STUB_LOGIN
 rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo)"
 check "required-absent (bot): exits 0" 0 "$rc"
-check "required-absent (bot): merges with --admin" 1 "$(grep -c -- '--admin' "$PRLAND_STUB_MERGE_LOG")"
+check "required-absent (bot): merges with --admin" 1 "$(admin_calls)"
 
 # required-absent, human author: nothing derives --admin for a human PR.
 reset_scenario
@@ -176,6 +190,85 @@ export PRLAND_STUB_REQUIRED PRLAND_STUB_CHECKRUNS
 rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo)"
 check "a pending required check is refused" 1 "$rc"
 check "a pending required check never attempts a merge" 0 "$(merge_calls)"
+
+# WO-045 gap 4: the review-gated case the owner's 2026-09-19 grant clears —
+# BLOCKED on a missing review with every required context green.
+reset_scenario
+PRLAND_STUB_REQUIRED=$'selftest\nself-lint'
+PRLAND_STUB_CHECKRUNS=$'selftest\tcompleted\tsuccess\t2026-09-19T10:00:00Z\nself-lint\tcompleted\tsuccess\t2026-09-19T10:00:01Z'
+PRLAND_STUB_MERGE_STATES="BLOCKED"
+PRLAND_STUB_REVIEW="REVIEW_REQUIRED"
+export PRLAND_STUB_REQUIRED PRLAND_STUB_CHECKRUNS PRLAND_STUB_MERGE_STATES PRLAND_STUB_REVIEW
+rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo)"
+check "REVIEW_REQUIRED with every required check green derives the admin bypass" "0 1 1" \
+    "$rc $(merge_calls) $(admin_calls)"
+check "  ...and says the review, not the checks, is what it bypassed" 1 \
+    "$(grep -c 'REVIEW_REQUIRED' "$WORK/stdout")"
+
+# WO-045: the boundary the widening must not cross. Same review-gated shape,
+# but a required check ran and failed.
+reset_scenario
+PRLAND_STUB_REQUIRED=$'selftest\nself-lint'
+PRLAND_STUB_CHECKRUNS=$'selftest\tcompleted\tfailure\t2026-09-19T10:00:00Z\nself-lint\tcompleted\tsuccess\t2026-09-19T10:00:01Z'
+PRLAND_STUB_MERGE_STATES="BLOCKED"
+PRLAND_STUB_REVIEW="REVIEW_REQUIRED"
+export PRLAND_STUB_REQUIRED PRLAND_STUB_CHECKRUNS PRLAND_STUB_MERGE_STATES PRLAND_STUB_REVIEW
+rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo)"
+check "a required check that ran and FAILED is never bypassed" "1 0 0" \
+    "$rc $(merge_calls) $(admin_calls)"
+
+# A check nobody required, but which ran and failed, cancels the bypass too.
+reset_scenario
+PRLAND_STUB_REQUIRED="selftest"
+PRLAND_STUB_CHECKRUNS=$'selftest\tcompleted\tsuccess\t2026-09-19T10:00:00Z\nadvisory\tcompleted\tfailure\t2026-09-19T10:00:01Z'
+PRLAND_STUB_MERGE_STATES="BLOCKED"
+PRLAND_STUB_REVIEW="REVIEW_REQUIRED"
+export PRLAND_STUB_REQUIRED PRLAND_STUB_CHECKRUNS PRLAND_STUB_MERGE_STATES PRLAND_STUB_REVIEW
+rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo)"
+check "a non-required check that failed also blocks the review bypass" "1 0" "$rc $(merge_calls)"
+check "  ...and names that check" 1 "$(grep -c 'advisory' "$WORK/stderr")"
+
+# A superseded earlier run of a required check never outvotes its latest run.
+reset_scenario
+PRLAND_STUB_REQUIRED="selftest"
+PRLAND_STUB_CHECKRUNS=$'selftest\tcompleted\tfailure\t2026-09-19T10:00:00Z\nselftest\tcompleted\tsuccess\t2026-09-19T11:00:00Z'
+export PRLAND_STUB_REQUIRED PRLAND_STUB_CHECKRUNS
+rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo)"
+check "the latest run of a required check decides, not an earlier one" "0 1" "$rc $(merge_calls)"
+
+# REVIEW_REQUIRED but not BLOCKED: a plain merge needs no bypass.
+reset_scenario
+PRLAND_STUB_REQUIRED="selftest"
+PRLAND_STUB_CHECKRUNS=$'selftest\tcompleted\tsuccess\t2026-09-19T10:00:00Z'
+PRLAND_STUB_REVIEW="REVIEW_REQUIRED"
+export PRLAND_STUB_REQUIRED PRLAND_STUB_CHECKRUNS PRLAND_STUB_REVIEW
+rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo)"
+check "REVIEW_REQUIRED that is not BLOCKED merges without --admin" "0 1 0" \
+    "$rc $(merge_calls) $(admin_calls)"
+
+# mergeStateStatus is lazily computed: UNKNOWN is re-read, never branched on.
+reset_scenario
+PRLAND_STUB_REQUIRED="selftest"
+PRLAND_STUB_CHECKRUNS=$'selftest\tcompleted\tsuccess\t2026-09-19T10:00:00Z'
+PRLAND_STUB_MERGE_STATES=$'UNKNOWN\nBLOCKED'
+PRLAND_STUB_REVIEW="REVIEW_REQUIRED"
+export PRLAND_STUB_REQUIRED PRLAND_STUB_CHECKRUNS PRLAND_STUB_MERGE_STATES PRLAND_STUB_REVIEW
+rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo --merge-state-poll-s 2)"
+check "an UNKNOWN merge state is re-read before any bypass is derived" "0 1" "$rc $(admin_calls)"
+check "  ...which took more than one PR read" 2 "$(cat "$WORK/view.pos")"
+
+# An UNKNOWN that never settles derives no bypass at all.
+reset_scenario
+PRLAND_STUB_REQUIRED="selftest"
+PRLAND_STUB_CHECKRUNS=$'selftest\tcompleted\tsuccess\t2026-09-19T10:00:00Z'
+PRLAND_STUB_MERGE_STATES="UNKNOWN"
+PRLAND_STUB_REVIEW="REVIEW_REQUIRED"
+PRLAND_STUB_FINAL_STATE="OPEN"
+export PRLAND_STUB_REQUIRED PRLAND_STUB_CHECKRUNS PRLAND_STUB_MERGE_STATES \
+    PRLAND_STUB_REVIEW PRLAND_STUB_FINAL_STATE
+rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo --merge-state-poll-s 0)"
+check "an UNKNOWN that never settles derives no --admin" 0 "$(admin_calls)"
+check "  ...and the run still fails its read-back" 1 "$rc"
 
 # The read-back must override a classifier denial that arrived after a real merge.
 reset_scenario
@@ -216,6 +309,9 @@ check "no PR number is a usage error" 2 "$rc"
 
 rc="$(run_sut bash "$SUT" abc)"
 check "a non-numeric PR number is a usage error" 2 "$rc"
+
+rc="$(run_sut bash "$SUT" 42 --merge-state-poll-s abc)"
+check "a non-numeric --merge-state-poll-s is a usage error" 2 "$rc"
 
 echo
 echo "$((PASS + FAIL)) assertion(s), $PASS passed, $FAIL failed"

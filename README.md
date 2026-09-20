@@ -119,21 +119,34 @@ memory, which has been wrong twice in one hour.
 scripts/pr-land.sh 42
 scripts/pr-land.sh 42 --repo owner/repo
 scripts/pr-land.sh 42 --dry-run
+scripts/pr-land.sh 42 --merge-state-poll-s 60
 ```
 
-The decision, in order: every required context present and successful is a
-plain squash merge; any required context present and failed, cancelled or
-timed out is a refusal, naming which one; required contexts absent **and**
-the PR authored by a bot is a squash merge with `--admin`; anything else —
-pending, or partially absent on a human PR — is a refusal.
+The decision, in order: any required context present and failed, cancelled or
+timed out is a refusal, naming which one; required contexts absent **and** the
+PR authored by a bot is a squash merge with `--admin`; every required context
+green while the PR is `BLOCKED` with `reviewDecision` `REVIEW_REQUIRED` is a
+squash merge with `--admin`; every required context green otherwise is a plain
+squash merge; anything else — pending, or partially absent on a human PR — is a
+refusal.
 
-**`--admin` is derived, never a parameter.** A bot-authored PR (for example,
-a release-please PR running on `GITHUB_TOKEN`) triggers a workflow run that
-GitHub never actually executes: zero jobs, zero check-runs, and the required
-contexts are permanently *absent* rather than failed. `--admin` is the only
-way past that, and the script reasons its way there instead of a caller
-asking for it — a caller cannot use this script to bypass a check that
-actually failed.
+**`--admin` is derived, never a parameter.** Its two paths are the two cases
+the owner's grant of 2026-09-19 clears. A bot-authored PR (for example, a
+release-please PR running on `GITHUB_TOKEN`) triggers a workflow run GitHub
+never actually executes: zero jobs, zero check-runs, and the required contexts
+are permanently *absent* rather than failed. A review-gated repo — the resting
+state of every repo here, with no second reviewer for the gate to summon —
+reports `REVIEW_REQUIRED` forever. The script reasons its way to both instead
+of a caller asking for either.
+
+**A check that ran and failed is never bypassed**, on any path, and any other
+check that ran and failed on the same head SHA cancels both bypasses too. That
+boundary is the point of deriving `--admin` rather than accepting it, and it
+carries its own named assertion in `pr-land-selftest.sh`.
+
+**`mergeStateStatus` is computed lazily** and answers `UNKNOWN` until GitHub
+has computed it, so it is re-read on a bounded budget (`--merge-state-poll-s`,
+default 30s). An `UNKNOWN` that never settles derives no bypass.
 
 **The PR's state is always read back after a merge attempt**, and the exit
 code depends on that read, not on the merge command's own exit status. A
@@ -169,16 +182,30 @@ reimplemented here, and `--admin` is never passed to it.
 ```bash
 scripts/land-queue.sh 42 43 44 --repo owner/repo
 scripts/land-queue.sh 42 --wait-checks-s 900 --stop-on-refusal
+scripts/land-queue.sh 42 --merge-state-poll-s 90
 scripts/land-queue.sh 42 --dry-run
 ```
 
 It exists for two guarantees a lone merge decision does not provide: one
 landing at a time per repo (a lock keyed on the repo slug, never a checkout
-path), and freshness — a PR behind its base is updated before it is handed
-to the merge gate, and if that moves its head SHA, required checks are
-waited for on the new SHA first. A PR whose merge is not confirmed by
-reading its state back afterward is reported refused, regardless of what
-`pr-land.sh`'s own exit code said.
+path), and freshness. Freshness is four things: a PR behind its base is updated
+before it is handed to the merge gate; a PR conflicting with its base is
+refused here, naming the base and the files it changes, rather than failing at
+the merge gate and reporting the wrong reason; a required check with no
+conclusion is waited for whoever moved the head SHA, not only when this run
+moved it; and no decision is taken on a `mergeStateStatus` of `UNKNOWN`, which
+is what GitHub answers until it has computed that field. After this run lands
+something, the next PR's first read is discarded, because it can still answer
+from the computation GitHub did against the old base.
+
+A PR whose merge is not confirmed by reading its state back afterward is
+reported refused, regardless of what `pr-land.sh`'s own exit code said.
+
+Every call to `gh` goes through one of five named functions —
+`repo_default_slug`, `pr_read`, `pr_files`, `pr_update_branch`,
+`pr_wait_checks` — and the selftest asserts that on the source, because the
+first thing that happened to the seam was a fourth call site appearing
+somewhere else.
 
 It does not resolve a conflict; it turns a silent, discovered-late pile-up
 of PRs into immediate, serialized, one-at-a-time refusals.
