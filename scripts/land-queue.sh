@@ -12,21 +12,28 @@
 #   G1  mutual exclusion — one land-queue.sh run per repo at a time, via a
 #       lock keyed on the repo slug, never the checkout path.
 #   G2  freshness — a PR behind its base is updated before it can be merged,
-#       and if that moves its head SHA, required checks are waited for on
-#       the new SHA before the merge gate is ever called.
+#       a PR conflicting with its base is refused before the merge gate is
+#       ever called, a required check that has not concluded is waited for no
+#       matter who moved the head SHA, and nothing is ever decided from a
+#       mergeStateStatus GitHub has not computed yet.
 #
-# Per PR, in order: read state, skip unless OPEN; if behind its base, update
-# the branch and refuse this PR on conflict; if the head SHA moved, wait for
-# required checks and refuse this PR if they do not all pass; call
-# pr-land.sh; then read the PR's state back and require MERGED, regardless
-# of pr-land.sh's own exit code — a classifier denial or a flaky exit status
-# is not proof either way.
+# Per PR, in order: read state until mergeStateStatus is a real value rather
+# than UNKNOWN; skip unless OPEN; refuse a DIRTY PR, naming its base and the
+# files it changes; if behind its base, update the branch and refuse this PR
+# on conflict; if any check has not concluded, or the head SHA moved, wait for
+# required checks and refuse this PR if they do not all pass; call pr-land.sh;
+# then read the PR's state back and require MERGED, regardless of pr-land.sh's
+# own exit code — a classifier denial or a flaky exit status is not proof
+# either way.
+#
+# Every forge call goes through one of five named functions:
+# repo_default_slug, pr_read, pr_files, pr_update_branch, pr_wait_checks.
 #
 # Usage:
 #   land-queue.sh <pr-number>... [--repo OWNER/REPO]
 #                 [--update-mode merge|rebase] [--wait-checks-s N]
-#                 [--stop-on-refusal] [--lock-timeout-s N]
-#                 [--state-dir PATH] [--dry-run]
+#                 [--merge-state-poll-s N] [--stop-on-refusal]
+#                 [--lock-timeout-s N] [--state-dir PATH] [--dry-run]
 #
 # Exit codes:
 #   0   every PR merged (or nothing OPEN was left to do)
@@ -48,12 +55,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PR_LAND="$SCRIPT_DIR/pr-land.sh"
 
 usage() {
-    sed -n '3,43p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,50p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 REPO=""
 UPDATE_MODE="merge"
 WAIT_CHECKS_S=1800
+MERGE_STATE_POLL_S=60
 STOP_ON_REFUSAL=0
 LOCK_TIMEOUT_S=0
 STATE_DIR=""
@@ -78,6 +86,10 @@ while [ $# -gt 0 ]; do
             [ $# -ge 2 ] || { echo "land-queue.sh: --wait-checks-s needs a value" >&2; exit 2; }
             WAIT_CHECKS_S="$2"; shift 2 ;;
         --wait-checks-s=*) WAIT_CHECKS_S="${1#--wait-checks-s=}"; shift ;;
+        --merge-state-poll-s)
+            [ $# -ge 2 ] || { echo "land-queue.sh: --merge-state-poll-s needs a value" >&2; exit 2; }
+            MERGE_STATE_POLL_S="$2"; shift 2 ;;
+        --merge-state-poll-s=*) MERGE_STATE_POLL_S="${1#--merge-state-poll-s=}"; shift ;;
         --stop-on-refusal) STOP_ON_REFUSAL=1; shift ;;
         --lock-timeout-s)
             [ $# -ge 2 ] || { echo "land-queue.sh: --lock-timeout-s needs a value" >&2; exit 2; }
@@ -117,25 +129,45 @@ case "$WAIT_CHECKS_S" in ''|*[!0-9]*)
     ;;
 esac
 
+case "$MERGE_STATE_POLL_S" in ''|*[!0-9]*)
+    echo "land-queue.sh: --merge-state-poll-s must be a number, got: $MERGE_STATE_POLL_S" >&2
+    exit 2
+    ;;
+esac
+
 case "$LOCK_TIMEOUT_S" in ''|*[!0-9]*)
     echo "land-queue.sh: --lock-timeout-s must be a number, got: $LOCK_TIMEOUT_S" >&2
     exit 2
     ;;
 esac
 
+repo_default_slug() {
+    gh repo view --json nameWithOwner --jq .nameWithOwner
+}
+
 if [ -z "$REPO" ]; then
-    REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)" || {
+    REPO="$(repo_default_slug)" || {
         echo "land-queue.sh: could not resolve repo; pass --repo OWNER/REPO" >&2
         exit 2
     }
 fi
 
-# pr_read — one line of state,mergeStateStatus,headRefOid,baseRefName so
-# every caller decides from a single consistent snapshot.
+# pr_read — one line of state, mergeStateStatus, headRefOid, baseRefName and
+# the number of checks with no conclusion, so every caller decides from a
+# single consistent snapshot.
 pr_read() {
     gh pr view "$1" --repo "$2" \
-        --json state,mergeStateStatus,headRefOid,baseRefName \
-        --jq '[.state, .mergeStateStatus, .headRefOid, .baseRefName] | @tsv'
+        --json state,mergeStateStatus,headRefOid,baseRefName,statusCheckRollup \
+        --jq '[.state, .mergeStateStatus, .headRefOid, .baseRefName,
+               ([.statusCheckRollup[]?
+                 | select((.__typename == "CheckRun" and .status != "COMPLETED")
+                          or (.__typename == "StatusContext"
+                              and (.state == "PENDING" or .state == "EXPECTED")))]
+                | length | tostring)] | @tsv'
+}
+
+pr_files() {
+    gh pr view "$1" --repo "$2" --json files --jq '[.files[]?.path] | join(", ")'
 }
 
 pr_update_branch() {
@@ -165,6 +197,25 @@ run_with_timeout() {
 
 pr_wait_checks() {
     run_with_timeout "$3" gh pr checks "$1" --repo "$2" --required --watch --fail-fast
+}
+
+# pr_read_settled PR REPO — a pr_read whose mergeStateStatus is a value.
+# GitHub computes that field lazily and answers UNKNOWN until it has, so this
+# polls rather than hand a null to a decision. 1 = unreadable, 2 = still
+# UNKNOWN when the budget ran out, which the caller must refuse on.
+pr_read_settled() {
+    local waited=0 line status
+    while :; do
+        line="$(pr_read "$1" "$2")" || return 1
+        status="$(printf '%s' "$line" | cut -f2)"
+        case "$status" in
+            UNKNOWN|"") ;;
+            *) printf '%s\n' "$line"; return 0 ;;
+        esac
+        [ "$waited" -ge "$MERGE_STATE_POLL_S" ] && return 2
+        sleep 1
+        waited=$((waited + 1))
+    done
 }
 
 LOCK_ACQUIRED=0
@@ -228,7 +279,8 @@ if [ "$DRY_RUN" -eq 1 ]; then
         state="$(printf '%s' "$line" | cut -f1)"
         mergestatus="$(printf '%s' "$line" | cut -f2)"
         base="$(printf '%s' "$line" | cut -f4)"
-        echo "land-queue.sh: --dry-run — PR $pr against $base is $state (mergeStateStatus: $mergestatus), not touching it"
+        unconcluded="$(printf '%s' "$line" | cut -f5)"
+        echo "land-queue.sh: --dry-run — PR $pr against $base is $state (mergeStateStatus: $mergestatus, unconcluded checks: $unconcluded), not touching it"
     done
     [ "$any_refused" -eq 1 ] && exit 1
     exit 0
@@ -246,6 +298,8 @@ while :; do
 done
 trap 'release_repo_lock "$lock_file"' EXIT
 
+base_moved=0
+
 for pr in "${PR_LIST[@]}"; do
     case "$pr" in
         ''|*[!0-9]*)
@@ -256,19 +310,44 @@ for pr in "${PR_LIST[@]}"; do
             ;;
     esac
 
-    line="$(pr_read "$pr" "$REPO")" || {
+    # This run has already moved the base, so the first read of the next PR can
+    # still answer from the computation GitHub did before that merge. Discard
+    # it: the read after it is the one taken against the new base.
+    if [ "$base_moved" -eq 1 ]; then
+        pr_read "$pr" "$REPO" >/dev/null 2>&1
+    fi
+
+    line="$(pr_read_settled "$pr" "$REPO")"
+    read_rc=$?
+    if [ "$read_rc" -eq 2 ]; then
+        echo "land-queue.sh: refusing PR $pr — mergeStateStatus never left UNKNOWN within ${MERGE_STATE_POLL_S}s, and a lazily-computed field is never acted on" >&2
+        any_refused=1
+        [ "$STOP_ON_REFUSAL" -eq 1 ] && break
+        continue
+    fi
+    if [ "$read_rc" -ne 0 ]; then
         echo "land-queue.sh: could not read PR $pr in $REPO" >&2
         any_refused=1
         [ "$STOP_ON_REFUSAL" -eq 1 ] && break
         continue
-    }
+    fi
     state="$(printf '%s' "$line" | cut -f1)"
     mergestatus="$(printf '%s' "$line" | cut -f2)"
     head_sha="$(printf '%s' "$line" | cut -f3)"
     base="$(printf '%s' "$line" | cut -f4)"
+    unconcluded="$(printf '%s' "$line" | cut -f5)"
+    case "$unconcluded" in ''|*[!0-9]*) unconcluded=0 ;; esac
 
     if [ "$state" != "OPEN" ]; then
         echo "land-queue.sh: skipping PR $pr — not open (state: $state)"
+        continue
+    fi
+
+    if [ "$mergestatus" = "DIRTY" ]; then
+        changed="$(pr_files "$pr" "$REPO")" || changed=""
+        echo "land-queue.sh: refusing PR $pr — it conflicts with its base $base (mergeStateStatus: DIRTY), so the merge gate is never called; resolve the conflict first${changed:+ (it changes: $changed)}" >&2
+        any_refused=1
+        [ "$STOP_ON_REFUSAL" -eq 1 ] && break
         continue
     fi
 
@@ -281,12 +360,25 @@ for pr in "${PR_LIST[@]}"; do
             [ "$STOP_ON_REFUSAL" -eq 1 ] && break
             continue
         fi
-        line2="$(pr_read "$pr" "$REPO")" || line2=""
+        line2="$(pr_read_settled "$pr" "$REPO")"
+        read2_rc=$?
+        if [ "$read2_rc" -ne 0 ]; then
+            echo "land-queue.sh: refusing PR $pr — could not re-read it after updating its branch" >&2
+            any_refused=1
+            [ "$STOP_ON_REFUSAL" -eq 1 ] && break
+            continue
+        fi
         new_head="$(printf '%s' "$line2" | cut -f3)"
+        unconcluded="$(printf '%s' "$line2" | cut -f5)"
+        case "$unconcluded" in ''|*[!0-9]*) unconcluded=0 ;; esac
     fi
 
-    if [ "$new_head" != "$head_sha" ]; then
-        echo "land-queue.sh: PR $pr head moved to $new_head — waiting for required checks"
+    if [ "$new_head" != "$head_sha" ] || [ "$unconcluded" -gt 0 ]; then
+        if [ "$new_head" != "$head_sha" ]; then
+            echo "land-queue.sh: PR $pr head moved to $new_head — waiting for required checks"
+        else
+            echo "land-queue.sh: PR $pr has $unconcluded check(s) with no conclusion — waiting for required checks"
+        fi
         if ! pr_wait_checks "$pr" "$REPO" "$WAIT_CHECKS_S"; then
             echo "land-queue.sh: refusing PR $pr — required checks did not all pass" >&2
             any_refused=1
@@ -307,6 +399,7 @@ for pr in "${PR_LIST[@]}"; do
         [ "$STOP_ON_REFUSAL" -eq 1 ] && break
         continue
     fi
+    base_moved=1
     echo "land-queue.sh: PR $pr landed"
 done
 
