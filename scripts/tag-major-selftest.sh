@@ -23,13 +23,10 @@ check() {
     if [ "$want" = "$got" ]; then ok "$name"; else nope "$name" "wanted [$want], got [$got]"; fi
 }
 
-# fake_gh — one stand-in for every call tag-major.sh makes: repo view,
-# listing tags, checking/reading/writing the floating ref. Existence of
-# the ref lives in TAGMAJ_STUB_EXISTS_FILE (seeded from
-# TAGMAJ_STUB_REF_EXISTS), and a successful create flips it to true, so a
-# POST followed by a read-back behaves like the real two calls it is
-# standing in for. --jq is applied with the real jq, not discarded, so
-# tag-major.sh's own parsing of the GitHub response shape is under test.
+# fake_gh — one stand-in for every gh call tag-major.sh makes. A create
+# flips TAGMAJ_STUB_EXISTS_FILE, so a POST then a read-back behaves like
+# the real two calls; --jq runs through real jq so the script's own
+# parsing of the response shape is under test.
 fake_gh() {
     mkdir -p "$WORK/bin"
     cat > "$WORK/bin/gh" <<'STUB'

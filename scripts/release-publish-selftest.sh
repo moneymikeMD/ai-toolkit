@@ -25,11 +25,9 @@ check() {
     if [ "$want" = "$got" ]; then ok "$name"; else nope "$name" "wanted [$want], got [$got]"; fi
 }
 
-# fake_gh — one stand-in serving release-publish.sh's own calls (pr list /
-# pr view / release view / commit check-runs, keyed on the --json field
-# list or subcommand) plus pr-land.sh's calls and tag-major.sh's calls, so
-# both real scripts run unmodified underneath it, the same composition
-# land-queue-selftest.sh uses for pr-land.sh.
+# fake_gh — one stand-in for every gh call release-publish.sh, pr-land.sh
+# and tag-major.sh make, keyed on the --json field list or subcommand, so
+# all three real scripts run unmodified underneath it.
 fake_gh() {
     mkdir -p "$WORK/bin"
     cat > "$WORK/bin/gh" <<'STUB'
@@ -139,11 +137,9 @@ STUB
     chmod +x "$WORK/bin/gh"
 }
 
-# reset_scenario — a green minor-release baseline (manifest 1.3.0 -> PR
-# computing 1.4.0, one open release-please PR, human-free merge via a
-# required-checks-green PR-land path, one completed+success check-run on
-# the merge commit, the release existing immediately, and an already
-# floating v1 tag). Each test overrides only what it cares about.
+# reset_scenario — a green minor-release baseline: manifest 1.3.0, one open
+# release-please PR computing 1.4.0, checks green, release present, v1
+# already floating. Each test overrides only what it cares about.
 reset_scenario() {
     REPO_DIR="$WORK/repo"
     mkdir -p "$REPO_DIR"
