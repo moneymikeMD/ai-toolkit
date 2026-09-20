@@ -75,6 +75,7 @@ fi
 
 if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then
     echo "$*" >> "$LANDQ_STUB_CHECKS_LOG"
+    [ -n "${LANDQ_STUB_CHECKS_SLEEP_S:-}" ] && sleep "$LANDQ_STUB_CHECKS_SLEEP_S"
     exit "${LANDQ_STUB_CHECKS_EXIT:-0}"
 fi
 
@@ -132,8 +133,10 @@ reset_scenario() {
     : > "$LANDQ_STUB_UPDATE_LOG"
     : > "$LANDQ_STUB_CHECKS_LOG"
     : > "$PRLAND_STUB_MERGE_LOG"
+    rm -rf "$WORK/state" 2>/dev/null
     LANDQ_STUB_UPDATE_EXIT="0"
     LANDQ_STUB_CHECKS_EXIT="0"
+    LANDQ_STUB_CHECKS_SLEEP_S=""
     LANDQ_STUB_FILES="README.md, scripts/land-queue.sh"
     PRLAND_STUB_BASE="main"
     PRLAND_STUB_SHA="deadbeef"
@@ -149,7 +152,8 @@ reset_scenario() {
     set_reads $'OPEN\tCLEAN\tsha1\tmain\t0'
     export LANDQ_STUB_COUNTFILE LANDQ_STUB_READS_FILE LANDQ_STUB_READS_POS \
         LANDQ_STUB_UPDATE_LOG LANDQ_STUB_CHECKS_LOG LANDQ_STUB_UPDATE_EXIT \
-        LANDQ_STUB_CHECKS_EXIT LANDQ_STUB_FILES PRLAND_STUB_MERGE_LOG \
+        LANDQ_STUB_CHECKS_EXIT LANDQ_STUB_CHECKS_SLEEP_S LANDQ_STUB_FILES \
+        PRLAND_STUB_MERGE_LOG \
         PRLAND_STUB_BASE PRLAND_STUB_SHA PRLAND_STUB_IS_BOT PRLAND_STUB_LOGIN \
         PRLAND_STUB_PR_STATE PRLAND_STUB_MERGE_STATE PRLAND_STUB_REVIEW \
         PRLAND_STUB_REQUIRED PRLAND_STUB_CHECKRUNS PRLAND_STUB_MERGE_EXIT \
@@ -237,6 +241,39 @@ set_reads $'OPEN\tCLEAN\tsha1\tmain\t0' $'MERGED\tCLEAN\tsha1\tmain\t0'
 rc="$(run_sut "$SUT" 42 --repo test-owner/test-repo --state-dir "$WORK/state")"
 check "a PR with nothing unconcluded is not waited on" "0 0 1" \
     "$rc $(calls "$LANDQ_STUB_CHECKS_LOG") $(calls "$PRLAND_STUB_MERGE_LOG")"
+
+# --- WO-047 gap 3: an externally moved head whose check-run has not
+# --- registered in statusCheckRollup yet reads back as zero unconcluded —
+# --- a head that is not the one this repo+PR last confirmed must still be
+# --- waited on.
+reset_scenario
+mkdir -p "$WORK/state4"
+printf '%s\n' "oldsha" > "$WORK/state4/test-owner_test-repo.pr42.head"
+set_reads $'OPEN\tCLEAN\tnewsha\tmain\t0' $'MERGED\tCLEAN\tnewsha\tmain\t0'
+rc="$(run_sut "$SUT" 42 --repo test-owner/test-repo --state-dir "$WORK/state4")"
+check "unconcluded checks are awaited when the head moved outside this run" "0 1 1" \
+    "$rc $(calls "$LANDQ_STUB_CHECKS_LOG") $(calls "$PRLAND_STUB_MERGE_LOG")"
+
+# --- ...and a head this repo+PR HAS already confirmed is not re-waited on
+# --- just because it is unchanged (the memory only adds a reason to wait,
+# --- never removes the existing unconcluded-count one).
+reset_scenario
+mkdir -p "$WORK/state5"
+printf '%s\n' "sha1" > "$WORK/state5/test-owner_test-repo.pr42.head"
+set_reads $'OPEN\tCLEAN\tsha1\tmain\t0' $'MERGED\tCLEAN\tsha1\tmain\t0'
+rc="$(run_sut "$SUT" 42 --repo test-owner/test-repo --state-dir "$WORK/state5")"
+check "a head already confirmed for this repo+PR is not waited on again" "0 0 1" \
+    "$rc $(calls "$LANDQ_STUB_CHECKS_LOG") $(calls "$PRLAND_STUB_MERGE_LOG")"
+
+# --- WO-047 gap 3: --wait-checks-s must bound the wait for real even on the
+# --- path where this run never called update-branch — proving the flag is
+# --- exercised, not merely threaded through as an unused parameter.
+reset_scenario
+set_reads $'OPEN\tCLEAN\tsha1\tmain\t1'
+LANDQ_STUB_CHECKS_SLEEP_S=3
+export LANDQ_STUB_CHECKS_SLEEP_S
+rc="$(run_sut "$SUT" 42 --repo test-owner/test-repo --state-dir "$WORK/state" --wait-checks-s 1)"
+check "wait-checks-s is honoured when this run did not call update-branch" 1 "$rc"
 
 # --- WO-045 gap 5: the forge seam holds, in the source itself. ---
 check "every gh call in land-queue.sh sits inside a named seam function" "" \
