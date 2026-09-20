@@ -11,6 +11,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: ./actions/comment-lint/comment-lint-selftest.sh
+      - name: PyYAML, which workspace.sh requires
+        run: python3 -c 'import yaml' || pip install pyyaml
       - run: |
           for t in scripts/*-selftest.sh; do
             echo "== $t =="

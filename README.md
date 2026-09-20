@@ -262,6 +262,41 @@ afterward and the script fails unless the read-back SHA matches the
 intended commit — a push reporting success has not always meant the tag
 actually moved.
 
+## workspace
+
+Operates on every repo a workspace manifest names, and generates the agent
+read scope from it. A workspace is a directory holding a `repos.yaml` and one
+subdirectory per project, each its own independent git clone.
+
+```bash
+scripts/workspace.sh list                       # name, branch, agent flag, url
+scripts/workspace.sh clone                      # clone whatever is missing
+scripts/workspace.sh status                     # branch, dirty count, unpushed count
+scripts/workspace.sh pull                       # ff-only, skipping dirty repos
+scripts/workspace.sh foreach -- git log -1      # run a command in each repo
+scripts/workspace.sh gen-settings               # write additionalDirectories
+scripts/workspace.sh status --root ~/code/other-workspace
+```
+
+`--root` defaults to the nearest ancestor holding a `repos.yaml`, so the verbs
+work from inside any project in the workspace. `--dry-run` makes `clone` and
+`gen-settings` print instead of act.
+
+**No submodules and no pinning.** The manifest records which repos belong
+together and which an agent may read, never which commit each sits at. A
+workspace that must be restorable to an exact multi-repo state wants submodules
+or a lockfile instead; this is for the case where the requirement is only that
+every project is visible and operable at once.
+
+**Why `gen-settings` writes absolute paths.** A relative
+`additionalDirectories` entry resolves against a root that is not the settings
+file's own directory, so `../sibling` silently names a path that does not
+exist. The generated entries are absolute, and every other key in the file is
+preserved.
+
+Requires PyYAML (`pip3 install pyyaml`, or `apt install python3-yaml`). The
+script fails with that message rather than misparsing.
+
 ## release MCP server
 
 `.mcp.json` in this repo registers a stdio MCP server (`release`, sourced
