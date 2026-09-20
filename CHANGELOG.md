@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.2.0...v1.3.0) (2026-09-20)
+
+
+### Features
+
+* **land-queue:** add scripts/land-queue.sh for wave landing ([#20](https://github.com/moneymikeMD/ai-toolkit/issues/20)) ([9f9f7ff](https://github.com/moneymikeMD/ai-toolkit/commit/9f9f7ff28fef01197db6f924034279aa588a3c24))
+* **verify-run:** add a verify-block runner with the four rules built in ([#19](https://github.com/moneymikeMD/ai-toolkit/issues/19)) ([c8f35b3](https://github.com/moneymikeMD/ai-toolkit/commit/c8f35b34d4794d6283570610f22706e47abad46e))
+
 ## [1.2.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.1.0...v1.2.0) (2026-09-20)
 
 
