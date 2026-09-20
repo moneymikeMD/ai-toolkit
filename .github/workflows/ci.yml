@@ -10,8 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - name: PyYAML, which workspace.sh requires
+        run: python3 -c 'import yaml' || pip install pyyaml
       # Globbed rather than listed, so a new script's or action's selftest runs
       # here the moment it lands instead of when someone remembers to add it.
+      # The glob covers comment-lint's selftest, which used to be named here.
       - run: |
           found=0
           for t in scripts/*-selftest.sh actions/*/*-selftest.sh; do
