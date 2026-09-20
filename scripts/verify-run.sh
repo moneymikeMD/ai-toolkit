@@ -133,12 +133,9 @@ strip_leading_cd() {
     ' <<<"$1"
 }
 
-# run_block ROOT BLOCK — writes BLOCK to a temp script, rooted at ROOT, and
-# runs it. `set -e` (no pipefail) makes every line gate the result on its
-# own exit status; pipefail is deliberately left off because this project's
-# own verify blocks rely on `producer | grep -q pattern` gating on grep's
-# exit status, and pipefail would misreport that as failed on a producer's
-# SIGPIPE when grep matches early. No trace flag is ever set.
+# run_block ROOT BLOCK — writes BLOCK to a temp script rooted at ROOT and
+# runs it. No pipefail: `producer | grep -q pattern` must gate on grep's
+# status, not a producer SIGPIPE from grep matching early.
 run_block() {
     local root="$1" block="$2" tmp rc
     tmp="$(mktemp)"
