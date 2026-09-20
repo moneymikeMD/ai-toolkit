@@ -63,6 +63,62 @@ python3 actions/comment-lint/comment-lint.py --stats     # per-file ratios, no g
 ./actions/comment-lint/comment-lint-selftest.sh          # 13 fixture assertions
 ```
 
+## no-personal-paths
+
+Fails a build when a tracked file names somebody's home directory. Two bugs at
+once: in a public repo it names a person, and anywhere it resolves nowhere on
+another machine — so a config carrying one (an `.mcp.json` server path, a compose
+volume, an Alloy `__path__`) is silently broken in every other checkout.
+
+### As a step
+
+```yaml
+- uses: actions/checkout@v4
+- uses: moneymikeMD/ai-toolkit/actions/no-personal-paths@v1
+```
+
+### As a whole job
+
+```yaml
+jobs:
+  no-personal-paths:
+    uses: moneymikeMD/ai-toolkit/.github/workflows/no-personal-paths.yml@v1
+```
+
+### Locally
+
+```bash
+python3 actions/no-personal-paths/no-personal-paths.py          # walks git ls-files
+python3 actions/no-personal-paths/no-personal-paths.py --stats  # what was scanned, no gate
+./actions/no-personal-paths/no-personal-paths-selftest.sh       # 23 fixture assertions
+```
+
+### Declaring a deliberate fixture
+
+A test fixture often needs a realistic absolute path. Declare those in
+`.github/personal-paths-allow` — a path glob, or `name:<who>` for a fake home
+directory used across several files:
+
+```
+# gitignore-style globs
+hooks/fixtures/**
+providers/*/*/fixtures/**
+
+# or exempt the fake identity itself, wherever it appears
+name:fixture
+name:adopter
+```
+
+`runner`, `root`, `ubuntu` and `linuxbrew` are exempt already — `/home/runner`
+is the GitHub Actions home, not a person. `CHANGELOG.md` is exempt because
+release-please generates it from commit messages, so a path quoted in a commit
+body would otherwise fail a build nobody can fix without rewriting history.
+
+**Why an allowlist and not a narrower file filter.** Scanning only config-shaped
+files would let a leak through in a `.md` or a `.sh`, which is where they
+actually accumulate. An exception you have to write down is an exception a
+reviewer sees in a diff.
+
 ## Adopting it in a repo that has a backlog
 
 Point it at an existing repository and it will light up. Start with
@@ -285,9 +341,8 @@ The server path is written `${HOME}/.claude/mcp/release/server.js`.
 variable is left unexpanded and warned about rather than failing the load, so a
 checkout on a machine without the server simply has no `release` tool.
 
-`no-personal-paths` in CI enforces the rule at the top of this file: a tracked
-file naming `/Users/<name>` or `/home/<name>` fails the build. `CHANGELOG.md` is
-exempt because it is generated from commit messages.
+The [no-personal-paths](#no-personal-paths) action enforces the rule at the top
+of this file, and this repo runs it on its own CI.
 
 ## Versioning
 

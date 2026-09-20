@@ -1,0 +1,30 @@
+name: no-personal-paths
+
+on:
+  workflow_call:
+    inputs:
+      allow-file:
+        type: string
+        required: false
+        default: ""
+      path:
+        type: string
+        required: false
+        default: ""
+      report-only:
+        type: string
+        required: false
+        default: "false"
+
+jobs:
+  no-personal-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # A reusable workflow's `uses: ./path` resolves against the CALLER's
+      # checkout, not this repo, so the action is referenced by full ref.
+      - uses: moneymikeMD/ai-toolkit/actions/no-personal-paths@v1
+        with:
+          allow-file: ${{ inputs.allow-file }}
+          path: ${{ inputs.path }}
+          report-only: ${{ inputs.report-only }}

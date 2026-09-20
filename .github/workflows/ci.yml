@@ -10,26 +10,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: ./actions/comment-lint/comment-lint-selftest.sh
+      # Globbed rather than listed, so a new script's or action's selftest runs
+      # here the moment it lands instead of when someone remembers to add it.
       - run: |
-          for t in scripts/*-selftest.sh; do
+          found=0
+          for t in scripts/*-selftest.sh actions/*/*-selftest.sh; do
+            [ -f "$t" ] || continue
+            found=$((found + 1))
             echo "== $t =="
             "$t"
           done
+          [ "$found" -gt 0 ] || { echo "::error::no selftests found — the glob is wrong" >&2; exit 1; }
+          echo "ran $found selftest(s)"
 
   no-personal-paths:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # This repo is public. An absolute home directory names a person and,
-      # in a config like .mcp.json, resolves nowhere on any other machine.
-      - run: |
-          if git ls-files -z | grep -zv '^CHANGELOG\.md$' \
-             | xargs -0 grep -nIE '/(Users|home)/[A-Za-z0-9._-]+'; then
-            echo "::error::tracked file(s) above name a personal home directory; use \${HOME}" >&2
-            exit 1
-          fi
-          echo "no personal paths in tracked files"
+      # Dogfooded by local path, so a break in the action fails this repo's own
+      # build before a consumer pinned at @v1 ever sees it.
+      - uses: ./actions/no-personal-paths
 
   shellcheck:
     runs-on: ubuntu-latest
