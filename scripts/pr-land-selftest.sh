@@ -72,6 +72,10 @@ if [ "$1" = "api" ]; then
     done
     case "$endpoint" in
         rules)
+            if [ -n "${PRLAND_STUB_RULES_HTTP_STATUS:-}" ]; then
+                echo "gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP ${PRLAND_STUB_RULES_HTTP_STATUS})" >&2
+                exit 1
+            fi
             printf '%s\n' "$PRLAND_STUB_REQUIRED"
             exit 0
             ;;
@@ -118,12 +122,13 @@ reset_scenario() {
     PRLAND_STUB_MERGE_EXIT="0"
     PRLAND_STUB_MERGE_STDERR=""
     PRLAND_STUB_FINAL_STATE="MERGED"
+    PRLAND_STUB_RULES_HTTP_STATUS=""
     export PRLAND_STUB_COUNTFILE PRLAND_STUB_MERGE_LOG PRLAND_STUB_VIEW_POS \
         PRLAND_STUB_REPO_NAMEWITHOWNER PRLAND_STUB_BASE PRLAND_STUB_SHA \
         PRLAND_STUB_IS_BOT PRLAND_STUB_LOGIN PRLAND_STUB_PR_STATE \
         PRLAND_STUB_MERGE_STATES PRLAND_STUB_REVIEW PRLAND_STUB_REQUIRED \
         PRLAND_STUB_CHECKRUNS PRLAND_STUB_MERGE_EXIT PRLAND_STUB_MERGE_STDERR \
-        PRLAND_STUB_FINAL_STATE
+        PRLAND_STUB_FINAL_STATE PRLAND_STUB_RULES_HTTP_STATUS
 }
 
 run_sut() {
@@ -144,6 +149,41 @@ rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo)"
 check "required-green: exits 0" 0 "$rc"
 check "required-green: merges exactly once" 1 "$(merge_calls)"
 check "required-green: never uses --admin" 0 "$(admin_calls)"
+
+# WO-047 gap 6: a private free-plan repo answers 403 on branch rules, not
+# because there are none, but because the plan cannot show any. That must
+# degrade to a plain merge, never a refusal.
+reset_scenario
+PRLAND_STUB_RULES_HTTP_STATUS="403"
+export PRLAND_STUB_RULES_HTTP_STATUS
+rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo)"
+check "a 403 on branch rules means no required contexts, not a refusal" "0 1" "$rc $(merge_calls)"
+
+# ...and it must never be conflated with the required-absent bot bypass:
+# even a bot author with a BLOCKED/REVIEW_REQUIRED state gets a plain merge,
+# not --admin, purely because the rules were unreadable.
+reset_scenario
+PRLAND_STUB_RULES_HTTP_STATUS="403"
+PRLAND_STUB_IS_BOT="true"
+PRLAND_STUB_LOGIN="github-actions[bot]"
+export PRLAND_STUB_RULES_HTTP_STATUS PRLAND_STUB_IS_BOT PRLAND_STUB_LOGIN
+rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo)"
+check "a 403 on branch rules never derives an admin bypass" "0 1 0" \
+    "$rc $(merge_calls) $(admin_calls)"
+
+# A 404 degrades the same way as a 403.
+reset_scenario
+PRLAND_STUB_RULES_HTTP_STATUS="404"
+export PRLAND_STUB_RULES_HTTP_STATUS
+rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo)"
+check "a 404 on branch rules also means no required contexts" "0 1" "$rc $(merge_calls)"
+
+# A genuine transport/auth failure is not 403/404 and must still refuse.
+reset_scenario
+PRLAND_STUB_RULES_HTTP_STATUS="500"
+export PRLAND_STUB_RULES_HTTP_STATUS
+rc="$(run_sut bash "$SUT" 42 --repo test-owner/test-repo)"
+check "a non-403/404 branch-rules failure still refuses the merge" "1 0" "$rc $(merge_calls)"
 
 # required-failed: a required context genuinely failed, must never bypass it.
 reset_scenario

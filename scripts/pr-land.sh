@@ -8,6 +8,9 @@
 #
 #   - every required context present and successful -> plain squash merge
 #   - any required context present and failed/cancelled/timed_out -> refuse
+#   - branch rules unreadable (403/404 — e.g. a private repo on a free plan
+#     cannot expose rulesets at all) -> treated as zero required contexts,
+#     same as a repo with genuinely no rules; never grounds for --admin
 #   - required contexts absent AND the PR author is a bot -> squash merge
 #     with --admin, because a GITHUB_TOKEN-authored run never creates a
 #     check-run at all (permanently absent, not failed)
@@ -171,12 +174,32 @@ if [ "$pr_state" != "OPEN" ]; then
     exit 1
 fi
 
-required_raw="$(gh api "repos/$REPO/rules/branches/$base_branch" \
-    --jq '.[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context' \
-    | sort -u)" || {
-    echo "pr-land.sh: could not read branch rules for $REPO@$base_branch" >&2
-    exit 1
+# unreadable_branch_rules_error MSG — true when a branch-rules read failed
+# because the rules are not visible (403/404), not because of a transport
+# fault. A free-plan private repo answers 403 for a call it would answer
+# with an empty list on a plan that could show rules at all.
+unreadable_branch_rules_error() {
+    case "$1" in
+        *'(HTTP 403)'*|*'(HTTP 404)'*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
+
+rules_output="$(gh api "repos/$REPO/rules/branches/$base_branch" \
+    --jq '.[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context' \
+    2>&1)"
+rules_rc=$?
+
+if [ "$rules_rc" -eq 0 ]; then
+    required_raw="$(printf '%s\n' "$rules_output" | sort -u)"
+elif unreadable_branch_rules_error "$rules_output"; then
+    echo "pr-land.sh: branch rules for $REPO@$base_branch are unreadable (403/404) — treating as no required contexts, not a refusal" >&2
+    required_raw=""
+else
+    echo "pr-land.sh: could not read branch rules for $REPO@$base_branch" >&2
+    printf '%s\n' "$rules_output" >&2
+    exit 1
+fi
 
 check_runs_raw="$(gh api --paginate "repos/$REPO/commits/$head_sha/check-runs" \
     --jq '.check_runs[] | [.name, .status, (.conclusion // "null"), (.started_at // "")] | @tsv')" || {

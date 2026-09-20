@@ -15,16 +15,19 @@
 #       a PR conflicting with its base is refused before the merge gate is
 #       ever called, a required check that has not concluded is waited for no
 #       matter who moved the head SHA, and nothing is ever decided from a
-#       mergeStateStatus GitHub has not computed yet.
+#       mergeStateStatus GitHub has not computed yet. A head this run did not
+#       move is still waited on if it is not the head this repo+PR last
+#       confirmed, since a just-arrived check-run can be absent from the
+#       rollup for a moment yet present by the time pr-land.sh reads it.
 #
 # Per PR, in order: read state until mergeStateStatus is a real value rather
 # than UNKNOWN; skip unless OPEN; refuse a DIRTY PR, naming its base and the
 # files it changes; if behind its base, update the branch and refuse this PR
-# on conflict; if any check has not concluded, or the head SHA moved, wait for
-# required checks and refuse this PR if they do not all pass; call pr-land.sh;
-# then read the PR's state back and require MERGED, regardless of pr-land.sh's
-# own exit code — a classifier denial or a flaky exit status is not proof
-# either way.
+# on conflict; if any check has not concluded, the head SHA moved, or this
+# head is new to land-queue's own memory of the PR, wait for required checks
+# and refuse this PR if they do not all pass; call pr-land.sh; then read the
+# PR's state back and require MERGED, regardless of pr-land.sh's own exit
+# code — a classifier denial or a flaky exit status is not proof either way.
 #
 # Every forge call goes through one of five named functions:
 # repo_default_slug, pr_read, pr_files, pr_update_branch, pr_wait_checks.
@@ -55,7 +58,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PR_LAND="$SCRIPT_DIR/pr-land.sh"
 
 usage() {
-    sed -n '3,50p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,53p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 REPO=""
@@ -373,11 +376,25 @@ for pr in "${PR_LIST[@]}"; do
         case "$unconcluded" in ''|*[!0-9]*) unconcluded=0 ;; esac
     fi
 
-    if [ "$new_head" != "$head_sha" ] || [ "$unconcluded" -gt 0 ]; then
+    # A head this run did not move may still be new to land-queue — compare
+    # to the last-seen head to catch a check-run not yet in the rollup.
+    head_seen_file="$state_dir/$(slug_key "$REPO").pr${pr}.head"
+    last_seen_head=""
+    [ -f "$head_seen_file" ] && last_seen_head="$(cat "$head_seen_file" 2>/dev/null)"
+    printf '%s\n' "$new_head" > "$head_seen_file" 2>/dev/null
+
+    moved_outside_run=0
+    if [ "$new_head" = "$head_sha" ] && [ -n "$last_seen_head" ] && [ "$last_seen_head" != "$new_head" ]; then
+        moved_outside_run=1
+    fi
+
+    if [ "$new_head" != "$head_sha" ] || [ "$unconcluded" -gt 0 ] || [ "$moved_outside_run" -eq 1 ]; then
         if [ "$new_head" != "$head_sha" ]; then
             echo "land-queue.sh: PR $pr head moved to $new_head — waiting for required checks"
-        else
+        elif [ "$unconcluded" -gt 0 ]; then
             echo "land-queue.sh: PR $pr has $unconcluded check(s) with no conclusion — waiting for required checks"
+        else
+            echo "land-queue.sh: PR $pr head $new_head is not the head this repo+PR last confirmed (was $last_seen_head) — its check landscape may not be visible yet; waiting for required checks"
         fi
         if ! pr_wait_checks "$pr" "$REPO" "$WAIT_CHECKS_S"; then
             echo "land-queue.sh: refusing PR $pr — required checks did not all pass" >&2
