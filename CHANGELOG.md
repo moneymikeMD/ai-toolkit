@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.3.0...v1.4.0) (2026-09-20)
+
+
+### Features
+
+* **landing:** widen the derived admin bypass and close three freshness gaps (WO-045) ([#24](https://github.com/moneymikeMD/ai-toolkit/issues/24)) ([1f0fa5c](https://github.com/moneymikeMD/ai-toolkit/commit/1f0fa5caf029e1ca3a66325ad58f4a791c4ba54a))
+* **mcp:** register the release MCP server for this repo (WO-029) ([#23](https://github.com/moneymikeMD/ai-toolkit/issues/23)) ([bf40c11](https://github.com/moneymikeMD/ai-toolkit/commit/bf40c11142d40d57b6cdd469db6ba0cb1ddc156e))
+
 ## [1.3.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.2.0...v1.3.0) (2026-09-20)
 
 
