@@ -140,6 +140,27 @@ code depends on that read, not on the merge command's own exit status. A
 classifier denial is not proof a merge did not happen — an already-merged PR
 has returned a denial after the fact — so the read-back is unconditional.
 
+## verify-run
+
+Runs a ticket's `verify` frontmatter block with the rules a hand-rolled
+runner keeps forgetting built in, instead of remembered.
+
+```bash
+scripts/verify-run.sh path/to/TICKET.md --root ~/code/wt-ticket-repo
+scripts/verify-run.sh path/to/TICKET.md --root ~/code/wt-ticket-repo --against main
+scripts/verify-run.sh path/to/TICKET.md --root ~/code/wt-ticket-repo --format json
+```
+
+The block runs under `set -e`, so every line gates the result rather than
+only its last one; the block's own `cd ~/code/<repo>` line is replaced by
+`--root`, so it runs against a worktree instead of whatever that path
+happens to resolve to on the machine running it; a line ending in
+`|| echo ...` is rejected before anything runs, because that idiom always
+exits 0; and `--against REF` runs the block in a scratch worktree at REF
+first and fails if it passes there, since a block that passes before the
+work exists is not testing anything. No shell trace flag is ever set, and
+the script's own source is checked for that string.
+
 ## Versioning
 
 Consumers pin a major tag (`@v1`). `release-please` maintains `CHANGELOG.md`
