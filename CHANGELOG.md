@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.5.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.4.1...v1.5.0) (2026-09-20)
+
+
+### Features
+
+* add workspace.sh, a manifest runner for a multi-repo workspace ([#29](https://github.com/moneymikeMD/ai-toolkit/issues/29)) ([3fa071a](https://github.com/moneymikeMD/ai-toolkit/commit/3fa071a2d733c48151dfcd7acc58bac6815d1902))
+
+
+### Bug Fixes
+
+* no personal home directory in a public repo, plus a reusable gate for it ([#30](https://github.com/moneymikeMD/ai-toolkit/issues/30)) ([a4cd9d8](https://github.com/moneymikeMD/ai-toolkit/commit/a4cd9d8af9a9345a521d1a0b5397a5b52ee7d928))
+
 ## [1.4.1](https://github.com/moneymikeMD/ai-toolkit/compare/v1.4.0...v1.4.1) (2026-09-20)
 
 
