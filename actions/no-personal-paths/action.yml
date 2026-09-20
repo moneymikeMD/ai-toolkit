@@ -1,0 +1,42 @@
+name: no-personal-paths
+description: Fail a build when a tracked file names somebody's home directory.
+author: Mike Garrett
+
+inputs:
+  allow-file:
+    description: Declared exceptions, gitignore-style globs or 'name:<who>' lines. Defaults to .github/personal-paths-allow when it exists.
+    required: false
+    default: ""
+  path:
+    description: File or directory to check. Defaults to every file git tracks in the caller's checkout.
+    required: false
+    default: ""
+  report-only:
+    description: Report violations without failing the build. Use while a repo still has a backlog.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_ALLOW_FILE: ${{ inputs.allow-file }}
+        INPUT_REPORT_ONLY: ${{ inputs.report-only }}
+      run: |
+        set -uo pipefail
+        args=()
+        [ -n "$INPUT_ALLOW_FILE" ] && args+=(--allow-file "$INPUT_ALLOW_FILE")
+        [ -n "$INPUT_PATH" ] && args+=("$INPUT_PATH")
+        if python3 "${{ github.action_path }}/no-personal-paths.py" "${args[@]+"${args[@]}"}"; then
+          status=0
+        else
+          status=$?
+        fi
+        # Exit 2 is a setup error, not a finding, so report-only never masks it.
+        if [ "$INPUT_REPORT_ONLY" = "true" ] && [ "$status" = "1" ]; then
+          echo "::notice::no-personal-paths found violations; report-only is set, not failing the build"
+          exit 0
+        fi
+        exit "$status"

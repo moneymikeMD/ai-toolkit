@@ -10,14 +10,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: ./actions/comment-lint/comment-lint-selftest.sh
       - name: PyYAML, which workspace.sh requires
         run: python3 -c 'import yaml' || pip install pyyaml
+      # Globbed rather than listed, so a new script's or action's selftest runs
+      # here the moment it lands instead of when someone remembers to add it.
+      # The glob covers comment-lint's selftest, which used to be named here.
       - run: |
-          for t in scripts/*-selftest.sh; do
+          found=0
+          for t in scripts/*-selftest.sh actions/*/*-selftest.sh; do
+            [ -f "$t" ] || continue
+            found=$((found + 1))
             echo "== $t =="
             "$t"
           done
+          [ "$found" -gt 0 ] || { echo "::error::no selftests found — the glob is wrong" >&2; exit 1; }
+          echo "ran $found selftest(s)"
+
+  no-personal-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Dogfooded by local path, so a break in the action fails this repo's own
+      # build before a consumer pinned at @v1 ever sees it.
+      - uses: ./actions/no-personal-paths
 
   shellcheck:
     runs-on: ubuntu-latest

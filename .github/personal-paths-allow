@@ -1,0 +1,8 @@
+# Declared exceptions for no-personal-paths. A path glob, or name:<who> to
+# exempt a fake home directory wherever it appears.
+#
+# The selftest builds fixture files containing deliberately fake absolute home
+# paths — that is the behaviour under test, so it cannot be written without
+# them. Scoped to the one file rather than exempting the names globally, so a
+# real leak using any of these names elsewhere still fails.
+actions/no-personal-paths/no-personal-paths-selftest.sh
