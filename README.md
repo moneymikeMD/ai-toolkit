@@ -160,6 +160,28 @@ exits 0; and `--against REF` runs the block in a scratch worktree at REF
 first and fails if it passes there, since a block that passes before the
 work exists is not testing anything. No shell trace flag is ever set, and
 the script's own source is checked for that string.
+## land-queue
+
+Lands a list of PRs against one repo, serialized and refreshed, and shells
+out to `pr-land.sh` for the merge decision itself — it is never
+reimplemented here, and `--admin` is never passed to it.
+
+```bash
+scripts/land-queue.sh 42 43 44 --repo owner/repo
+scripts/land-queue.sh 42 --wait-checks-s 900 --stop-on-refusal
+scripts/land-queue.sh 42 --dry-run
+```
+
+It exists for two guarantees a lone merge decision does not provide: one
+landing at a time per repo (a lock keyed on the repo slug, never a checkout
+path), and freshness — a PR behind its base is updated before it is handed
+to the merge gate, and if that moves its head SHA, required checks are
+waited for on the new SHA first. A PR whose merge is not confirmed by
+reading its state back afterward is reported refused, regardless of what
+`pr-land.sh`'s own exit code said.
+
+It does not resolve a conflict; it turns a silent, discovered-late pile-up
+of PRs into immediate, serialized, one-at-a-time refusals.
 
 ## Versioning
 
