@@ -66,6 +66,11 @@ check "comments and blank lines are ignored" "$(rc)" "1"
 check "and the fixture is the one still reported" \
     "$(run | grep -c '^fixtures/stdin.json:1:')" "1"
 
+printf '# why: leak.json pointed at /Users/realperson\nname:realperson\nname:fixture\n' \
+    > .github/personal-paths-allow
+check "the allow file exempts itself, comments and all" "$(rc)" "0"
+check "and is not reported" "$(run | grep -c 'personal-paths-allow')" "0"
+
 rm -f .github/personal-paths-allow
 check "no allow file is not an error" "$(rc)" "1"
 check "a missing --allow-file IS an error" "$(rc --allow-file nope)" "2"

@@ -150,16 +150,21 @@ def main():
         return 0
 
     explicit = args.allow_file is not None
-    allow_globs, allow_names = load_allow_file(
-        args.allow_file or DEFAULT_ALLOW_FILE, explicit)
+    allow_path = args.allow_file or DEFAULT_ALLOW_FILE
+    allow_globs, allow_names = load_allow_file(allow_path, explicit)
     allowed_names = BUILTIN_ALLOWED_NAMES | set(allow_names)
+
+    # The allow file exempts itself. It is a declarations file, and naming the
+    # path being declared — in a glob or in a comment explaining why — is its
+    # whole job, so it would otherwise always flag itself.
+    allow_self = os.path.normpath(allow_path)
 
     files = walk(args.paths) if args.paths else tracked_files()
 
     findings, skipped_binary, skipped_allowed = [], 0, 0
     for path in sorted(set(files)):
         norm = path[2:] if path.startswith("./") else path
-        if norm in BUILTIN_ALLOWED_PATHS:
+        if norm in BUILTIN_ALLOWED_PATHS or os.path.normpath(norm) == allow_self:
             skipped_allowed += 1
             continue
         if any(rx.match(norm) for _pat, rx in allow_globs):
