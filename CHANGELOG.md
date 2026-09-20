@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/moneymikeMD/ai-toolkit/compare/v1.4.0...v1.4.1) (2026-09-20)
+
+
+### Bug Fixes
+
+* **landing:** degrade unreadable branch rules and close the head-race in land-queue (WO-047) ([#26](https://github.com/moneymikeMD/ai-toolkit/issues/26)) ([974556a](https://github.com/moneymikeMD/ai-toolkit/commit/974556a55c5f9365ba19998848256dc1c95d4ece))
+
 ## [1.4.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.3.0...v1.4.0) (2026-09-20)
 
 
