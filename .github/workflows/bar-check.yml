@@ -1,0 +1,37 @@
+name: bar-check
+
+on:
+  workflow_call:
+    inputs:
+      base:
+        type: string
+        required: false
+        default: ""
+      head:
+        type: string
+        required: false
+        default: "HEAD"
+      allow-file:
+        type: string
+        required: false
+        default: ".bar-check-allow"
+      report-only:
+        type: string
+        required: false
+        default: "true"
+
+jobs:
+  bar-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # A reusable workflow's `uses: ./path` resolves against the CALLER's
+      # checkout, not this repo, so the action is referenced by full ref.
+      - uses: moneymikeMD/ai-toolkit/actions/bar-check@v1
+        with:
+          base: ${{ inputs.base }}
+          head: ${{ inputs.head }}
+          allow-file: ${{ inputs.allow-file }}
+          report-only: ${{ inputs.report-only }}

@@ -1,0 +1,9 @@
+# Declared exceptions for bar-check, one per line:
+#   <category> <path-glob> [<substring>]
+# Categories: suppression, test-deleted, test-skipped, assertion-removed,
+# threshold-lowered, or * for any. Write the reason above the entry.
+
+# bar-check's own action quotes every pattern it detects, in the detector, in
+# its fixtures and in its README examples, so it reports itself without this.
+* actions/bar-check/*
+* README.md

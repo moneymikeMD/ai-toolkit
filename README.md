@@ -231,6 +231,93 @@ declaring the same `name` under one label is the worst collision there is —
 only the first is reachable — so it is reported by id and path rather than
 deduplicated away.
 
+## bar-check
+
+Fails a diff that lowers a quality bar instead of meeting it. An agent that
+cannot make a check pass can silence it instead, and the diff still merges
+green — most easily in an unattended wave, where the same agent writes both the
+code and the test that proves it.
+
+Five categories, all language-generic, all read off the diff:
+
+| Category | What it catches |
+| --- | --- |
+| `suppression` | an added `@ts-ignore`, `eslint-disable`, `# noqa`, `# type: ignore`, `// nolint`, `#[allow(…)]`, `@SuppressWarnings`, `# nosec`, `NOSONAR` and kin |
+| `test-deleted` | a test file deleted, or more test declarations removed than added |
+| `test-skipped` | an added `it.only`, `.skip`, `xit`, `@pytest.mark.skip`, `t.Skip`, `#[ignore]`, `@Disabled` |
+| `assertion-removed` | a surviving test file that ends the diff with fewer assertions than it started with |
+| `threshold-lowered` | a numeric threshold in a config file edited downward, coverage floors in particular |
+
+It reads the diff, not the tree, so a violation already in the repository is
+not the new branch's problem. Renaming a test is net zero; removing a
+suppression is never reported.
+
+### As a step
+
+```yaml
+- uses: actions/checkout@v7
+  with:
+    fetch-depth: 0
+- uses: moneymikeMD/ai-toolkit/actions/bar-check@v1
+  with:
+    report-only: "true"
+```
+
+`fetch-depth: 0` is required — the check needs the merge base. With no `base:`
+it uses the pull request's base sha, then the push's before sha, and fails
+loudly rather than passing on an empty diff if neither resolves.
+
+### As a whole job
+
+```yaml
+jobs:
+  bar-check:
+    uses: moneymikeMD/ai-toolkit/.github/workflows/bar-check.yml@v1
+    with:
+      report-only: "true"
+```
+
+### Locally
+
+```bash
+python3 actions/bar-check/bar-check.py --base origin/main
+python3 actions/bar-check/bar-check.py --diff - < some.patch
+./actions/bar-check/bar-check-selftest.sh    # 25 fixture + 10 real-git assertions
+```
+
+### Declaring an exception
+
+A legitimate suppression or a deliberately skipped test goes in
+`.bar-check-allow`, one rule per line, `<category> <path-glob> [<substring>]`:
+
+```
+# Upstream types are wrong here; tracked as TICKET-1.
+suppression src/legacy/*.ts @ts-ignore
+
+# Quarantined until the flake is understood.
+test-skipped tests/test_network.py
+```
+
+`*` in the category column matches any category. The allow-file is never
+scanned as source, so quoting a pattern in order to exempt it does not report
+it. Same reasoning as `no-personal-paths`: an exception you have to write down
+is an exception a reviewer sees in the diff that needs it, and it beats a
+cleverer regex that tries to guess intent.
+
+### Adoption
+
+`report-only` defaults to `"true"`, and every repo starts there. Run it over a
+few waves, read what it names, add the exceptions that are real, and switch the
+gate on per repo afterwards — the graduated path `comment-lint` took when
+roughly 1100 pre-existing violations would have reddened every branch in
+homelab.
+
+Two known limits, both deliberate. Only *downward* threshold edits are
+reported: a ceiling that gets raised (`max-warnings 0` → `10`) is the same move
+in the other direction, and detecting it needs the key to be known as a ceiling
+rather than a floor. And an assertion count is a count, so swapping a real
+assertion for a weaker one at the same line count is invisible.
+
 ## git-retry
 
 Runs a git command and retries **only** transient network failures. For callers
