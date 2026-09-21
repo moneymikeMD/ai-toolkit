@@ -1,0 +1,52 @@
+name: bar-check
+description: Fail a diff that lowers a quality bar — a new suppression, a deleted or skipped test, a removed assertion, a threshold edited downward.
+author: Mike Garrett
+
+inputs:
+  base:
+    description: Commit to diff against. Defaults to the pull request base, or the push's before sha.
+    required: false
+    default: ""
+  head:
+    description: Commit at the tip of the change under review.
+    required: false
+    default: "HEAD"
+  allow-file:
+    description: File of declared exceptions, one '<category> <path-glob> [<substring>]' per line.
+    required: false
+    default: ".bar-check-allow"
+  report-only:
+    description: Report findings without failing the build, including when no base commit resolves. Every repo starts here; the gate is switched on per repo afterwards.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        INPUT_BASE: ${{ inputs.base }}
+        INPUT_HEAD: ${{ inputs.head }}
+        INPUT_ALLOW_FILE: ${{ inputs.allow-file }}
+        INPUT_REPORT_ONLY: ${{ inputs.report-only }}
+        EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        EVENT_BEFORE: ${{ github.event.before }}
+      run: |
+        set -uo pipefail
+        base="$INPUT_BASE"
+        [ -n "$base" ] || base="${EVENT_BASE_SHA:-}"
+        [ -n "$base" ] || base="${EVENT_BEFORE:-}"
+        if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+          msg="bar-check has no base commit to diff against. Check out with fetch-depth: 0, or pass base:"
+          if [ "$INPUT_REPORT_ONLY" = "true" ]; then
+            echo "::warning::$msg"
+            exit 0
+          fi
+          echo "::error::$msg" >&2
+          exit 1
+        fi
+        args=(--base "$base" --head "$INPUT_HEAD" --allow-file "$INPUT_ALLOW_FILE")
+        if [ "$INPUT_REPORT_ONLY" = "true" ]; then
+          args+=(--report-only)
+        fi
+        python3 "${{ github.action_path }}/bar-check.py" "${args[@]}"

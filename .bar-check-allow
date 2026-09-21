@@ -1,0 +1,15 @@
+# Declared exceptions for bar-check, one per line:
+#   <category> <path-glob> [<substring>]
+# Categories: suppression, test-deleted, test-skipped, assertion-removed,
+# threshold-lowered, or * for any. Write the reason above the entry — a '#'
+# only opens a comment as a line's first character, so the substring column
+# can hold '# noqa' and its kin.
+
+# bar-check's own action quotes every pattern it detects, in the detector, in
+# its fixtures and in its README examples, so it reports itself without this.
+# Named per category rather than '*': bar-check must still catch its own tests
+# being deleted, moved out or hollowed out.
+suppression actions/bar-check/*
+test-skipped actions/bar-check/*
+suppression README.md
+test-skipped README.md
