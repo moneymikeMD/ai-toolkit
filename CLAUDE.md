@@ -168,6 +168,34 @@ the collision is one `source` away. It is called out in `kit.sh`'s header at
 the point of use. If a caller ever needs both, add a `kit_on_exit` registration
 the way labkit did rather than trapping directly.
 
+### Before accepting a script: find its third consumer surface
+
+The two-surfaces table above describes what **this repo publishes**. It does
+not describe what the donor repo was serving, and there is a third consumer
+class that is invisible from here and fails silently for strangers:
+`${CLAUDE_PLUGIN_ROOT}/scripts/<name>`, referenced from a plugin's shipped
+skills, agents and hooks.
+
+A marketplace installer of that plugin has `CLAUDE_PLUGIN_ROOT` and has **no
+ai-toolkit checkout at all**. So deleting a script from the donor turns every
+such reference into a dead path for every external adopter, while the donor's
+own CI and the operator's own machine stay green — the failure lands only on
+third parties, who have no way to report it.
+
+Found the hard way on NWM-128. The plan and the receiving side both looked at
+CI usage and missed four references in two shipped skills
+(`tickets-protocol`, `session-start`) and one agent (`librarian`).
+night-watchman fixed it by routing them through a
+`scripts/ai-toolkit-root.sh` shim that ships **with the plugin** and exits 1
+naming what to set, on the same shape as its existing `work-order-root.sh`.
+
+**So before accepting any further script here, grep the donor for
+`${CLAUDE_PLUGIN_ROOT}/scripts/<name>` as well as its CI.** This is the same
+defect that blocks NWM-129 — a `plugin.json` SessionEnd hook hardcoding
+`$PLUGIN_ROOT/scripts/claude-cost*.py` — so it is a recurring shape, not one
+ticket's accident. `land-branch.sh` (NWM-131) already has two such references
+in `session-start/SKILL.md` and will need the same treatment.
+
 ### Paths are the caller's, and cwd is what resolves them
 
 `known-issue.sh` takes its target from `git rev-parse --show-toplevel`, not
