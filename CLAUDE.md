@@ -193,8 +193,20 @@ naming what to set, on the same shape as its existing `work-order-root.sh`.
 `${CLAUDE_PLUGIN_ROOT}/scripts/<name>` as well as its CI.** This is the same
 defect that blocks NWM-129 — a `plugin.json` SessionEnd hook hardcoding
 `$PLUGIN_ROOT/scripts/claude-cost*.py` — so it is a recurring shape, not one
-ticket's accident. `land-branch.sh` (NWM-131) already has two such references
-in `session-start/SKILL.md` and will need the same treatment.
+ticket's accident. `land-branch.sh` (NWM-131) already has two such references,
+at `session-start/SKILL.md:155` and `:339`.
+
+**Running the check is mandatory; rerouting is not.** NWM-131 is a *wrapper
+split* — the generic merge-and-push core comes here, the ticket lifecycle
+stays in night-watchman as a wrapper — so those two paths may correctly keep
+pointing at the retained wrapper and need no change at all. Decide it
+deliberately rather than discover it; the check tells you which, and only a
+whole-file move forces a reroute.
+
+**State the adopter cost out loud when you do reroute.** A resolver shim means
+an adopting repo now needs a checkout or an env var where the script used to
+ship inside the plugin. That is a real cost this repo imposes on consumers, and
+it is the part most likely to be forgotten later.
 
 ### Paths are the caller's, and cwd is what resolves them
 
