@@ -5,19 +5,14 @@ Context for Claude Code sessions opened in this repository.
 ## What this repo is
 
 `moneymikeMD/ai-toolkit` is **public**: shared tooling that a *repository*
-consumes, as opposed to config a *machine* applies, which is the private
-`moneymikeMD/dotfiles` chezmoi repo. It sits in `~/code/home_workspace`, a
-manifest workspace of independent clones — not a monorepo, no submodules, no
-pinning between siblings. Public specifically so a caller of any visibility
-can consume it without a credential: a public repo can only consume public
-source, which is why this can't just live in dotfiles.
+consumes, as opposed to config a *machine* applies. Public on purpose — a
+GitHub Action can only be consumed from a repo the caller can read, so keeping
+this public is what lets a private consumer use it with no credential.
 
-It has **no tracker of its own**. File work against the repo that will
-consume the change — usually `NWM` or `LAB` — and say in the ticket body that
-it lands here (`ARCHITECTURE.md`, "How they depend on each other"). That's why
-commit subjects here carry foreign prefixes: `NWM-140`, `NWM-141`, `WO-029`,
-`WO-047`, `WO-045`. There is also no `docs/handoff/` or `docs/handoffs/` here —
-that convention exists in night-watchman, switchtender and homelab only.
+It has **no tracker of its own**. Work is filed against the repo that will
+consume the change and says in the ticket body that it lands here, which is why
+commit subjects here carry another project's prefixes: `NWM-140`, `NWM-141`,
+`WO-029`, `WO-047`, `WO-045`. There is no handoff-doc convention here either.
 
 ## Two surfaces, two opposite propagation rules
 
@@ -52,9 +47,9 @@ history), and `no-major`.
 **Only `selftest` and `self-lint` are required status checks** on the `main`
 ruleset (`gh api repos/moneymikeMD/ai-toolkit/rulesets/23685819`). The other
 four jobs run and report but don't gate a merge — including `no-major`, which
-carries the entire ecosystem's version cap. The owner is a ruleset bypass
-actor, so this only bites an outside contributor's PR in principle; nothing
-mechanical stops the owner's own merge if `no-major` were red.
+carries the version cap. Repository admins are ruleset bypass actors, so
+nothing mechanical stops a maintainer's merge even with `no-major` red; the
+cap holds by rule, not by gate.
 
 Dependabot (`.github/dependabot.yml`) watches only the `github-actions`
 ecosystem, weekly, and auto-merges non-major bumps
@@ -68,11 +63,10 @@ package.
 repos/moneymikeMD/ai-toolkit/releases/latest --jq .tag_name` rather than
 trusting this line). A `major-tag` job in `release-please.yml` re-points the
 floating `v1` onto every release's exact tag automatically, the moment
-release-please cuts one — **ai-toolkit is the only repo in the workspace known
-to have automated this in its own CI**. `work-order` and `night-watchman` have
-no such job; an operator cuts their releases by running
-`ai-toolkit/scripts/release-publish.sh <major|minor|patch>` from *inside*
-their checkout (it reads `./.release-please-manifest.json` in the cwd), which
+release-please cuts one. **Consuming repos generally do not automate this in
+their own CI** — an operator cuts their releases by running
+`scripts/release-publish.sh <major|minor|patch>` from *inside*
+that checkout (it reads `./.release-please-manifest.json` in the cwd), which
 merges the release PR via `pr-land.sh`, waits on CI, then moves the tag via
 `tag-major.sh`. `tag-major.sh` refuses to move any name matching `vX.Y.Z` —
 only the floating major — and moves it through the GitHub Git Data API with a
@@ -87,9 +81,8 @@ not the change itself: ship it as a plain `feat:` and describe the
 incompatibility in prose. `release-publish.sh` also enforces the owner-only
 half of this in code, not just in CI: it refuses to publish a major release
 without `--i-am-the-owner`. Confirmed present here as CI job `no-major`
-(commit `1725a11`); also runs in work-order and night-watchman.
-**Switchtender runs release-please too and is not covered** — don't assume
-the cap is workspace-wide just because three of five versioned repos have it.
+(commit `1725a11`). Not every consuming repo runs it — don't assume a repo is
+covered without checking its own workflows.
 
 ## `scripts/`
 
@@ -100,19 +93,15 @@ from observed state rather than trusting a caller's flag), `land-queue.sh`
 worktree, gating on every line — not just the last one, and not a hardcoded
 `cd`), `git-retry.sh` (retry only transient push/fetch/clone/pull failures;
 everything else, e.g. a rejected ref or conflict, fails immediately),
-`release-publish.sh` and `tag-major.sh` (above), and `workspace.sh` (operate on
-every repo a `repos.yaml` manifest names — this is what the workspace root's
-own `CLAUDE.md` calls as `ai-toolkit/scripts/workspace.sh list/status/clone/…`,
-by path, never by `cd`-ing in first).
+`release-publish.sh` and `tag-major.sh` (above), and `workspace.sh` (operates on
+every repo a `repos.yaml` manifest names, invoked by path rather than by
+`cd`-ing into a repo first).
 
-`scripts/` is not yet the complete set the workspace intends: WO-013 assigned
-five more scripts here — `land-branch.sh`, `claude-cost.py`,
-`script-analytics.py`, `script-retire.sh`, `known-issue.sh` — and none have
-arrived; they still live duplicated in homelab and night-watchman (Epic
-NWM-125; LAB-228 and NWM-129/130/131 own the two sides). Relatedly, NWM-131
-(extract a generic `land-branch.sh` core to here) is blocked on NWM-138 and
-hasn't moved — homelab's and night-watchman's forks (1402 and 1111 lines) keep
-independently diverging in the meantime.
+**`scripts/` is not yet the complete set it is meant to be.** Five more are
+assigned here and none have arrived — `land-branch.sh`, `claude-cost.py`,
+`script-analytics.py`, `script-retire.sh`, `known-issue.sh` — so each still
+lives duplicated in the consuming repos, diverging. Do not read the current
+contents as the intended set.
 
 ## `actions/`
 
@@ -142,11 +131,11 @@ pins it, and nothing fails here if `verify-run.sh` is renamed or moved.
 
 ## The registered-but-dead `release` MCP server
 
-`.mcp.json` registers a `release` MCP server. ai-toolkit owns the
-*registration*; the server code is dotfiles'. It was fixed 2026-09-21
-(LAB-282) to read `${HOME}` instead of a literal Mac path — a
-`no-personal-paths`-shaped bug in ai-toolkit's own config. It has **never
-actually connected**: every dotfiles-registered MCP server sits at *pending
-approval* until the owner runs `claude` once, by hand, in this checkout, and
-an agent is refused write access to `~/.claude.json` as `[Self-Modification]`.
-Don't assume it's live because `.mcp.json` declares it.
+`.mcp.json` registers a `release` MCP server. This repo owns the
+*registration* only; the server itself is installed elsewhere. It was fixed
+2026-09-21 to read `${HOME}` rather than a literal path — a
+`no-personal-paths`-shaped bug in this repo's own config. It has **never
+actually connected**: a newly registered MCP server stays at *pending
+approval* until a human runs `claude` once, by hand, in the checkout, and an
+agent cannot approve one for itself. Don't assume it is live because
+`.mcp.json` declares it.
