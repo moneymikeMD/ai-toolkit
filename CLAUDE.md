@@ -23,7 +23,7 @@ inert until a tag moves, and both are wrong for half the repo.
 | Surface | What | Consumed as | Propagation |
 | --- | --- | --- | --- |
 | **CI** | `actions/` (4) + their reusable workflow wrappers | `uses: moneymikeMD/ai-toolkit/actions/<name>@v1` | Pinned to the floating major. Landing on `main` changes nothing until `v1` moves. |
-| **Operator scripts** | `scripts/` (7), each with its own `<name>-selftest.sh` | Invoked by **absolute path** out of the caller's working checkout | None. Not pinned, not versioned, not released — a save to disk is live to every caller immediately. |
+| **Operator scripts** | `scripts/` (8), each with its own `<name>-selftest.sh`, over `scripts/lib/kit.sh` | Invoked by **absolute path** out of the caller's working checkout | None. Not pinned, not versioned, not released — a save to disk is live to every caller immediately. |
 
 Verified live: `git ls-remote origin refs/tags/v1` and `git rev-parse
 v1.6.0`/`main` all resolve to `641f38b`, and `git ls-tree v1 actions/` lists
@@ -97,11 +97,99 @@ everything else, e.g. a rejected ref or conflict, fails immediately),
 every repo a `repos.yaml` manifest names, invoked by path rather than by
 `cd`-ing into a repo first).
 
-**`scripts/` is not yet the complete set it is meant to be.** Five more are
-assigned here and none have arrived — `land-branch.sh`, `claude-cost.py`,
-`script-analytics.py`, `script-retire.sh`, `known-issue.sh` — so each still
-lives duplicated in the consuming repos, diverging. Do not read the current
-contents as the intended set.
+`known-issue.sh` (manage a repo's `docs/known-issues/` entries and the
+generated `docs/known-issues.md` index; `lint` is the drift gate a consumer
+runs in CI), arrived 2026-09-21 under NWM-128.
+
+**`scripts/` is not yet the complete set it is meant to be.** Of the five
+assigned here, `known-issue.sh` has arrived; `script-analytics.py`,
+`script-retire.sh` (NWM-130), `claude-cost.py` (NWM-129) and `land-branch.sh`
+(NWM-131) have not, so each still lives duplicated in the consuming repos,
+diverging. Do not read the current contents as the intended set.
+
+### `scripts/lib/kit.sh` — why there is a library here now
+
+Decided 2026-09-21 under NWM-128, having to be decided before `known-issue.sh`
+could move at all. Until that day every script here was standalone — seven
+scripts, no shared library, `grep -l '^\. \|^source ' scripts/*.sh` empty. The
+incoming scripts source night-watchman's `scripts/lib/kit.sh`, so the choice
+was: bring the library, inline its helpers into each script, or take a subset.
+
+**The library came.** Inlining would have duplicated five function bodies
+across two scripts and left them to drift, which is the exact failure this repo
+exists to end — it is the single copy, so it may not reintroduce copies
+internally. The standalone property it costs was never a stated choice: six
+commits each added one small script, no commit message or `README.md` line ever
+claimed it, so it was an artefact of scripts arriving one at a time rather than
+a constraint anyone set.
+
+**The admission rule is "is it generic", not "is it used today".**
+`herdr_notify` did not come: it names one specific terminal multiplexer, and a
+public generic toolkit must not carry a helper bound to a particular tool — the
+same boundary rule that keeps hosts and vaults out of this repo. `warn` did
+come though nothing here calls it yet, because it is generic and pairs with
+`die`. Six helpers: `die`, `warn`, `need`, `show_help`, `known_command`,
+`tmpfile`. Add to it on that rule; do not add a helper a consuming repo should
+own.
+
+Two consequences to keep in mind. `scripts/*.sh` does **not** glob
+`scripts/lib/*.sh`, so the `shellcheck` job names both — a new lib file is
+covered only because that glob is there. And `show_help` (prints the caller's
+own `#` header) is a second help convention beside the `usage()` heredoc the
+older seven scripts hand-write; converting them was out of scope, so both
+conventions are live and that is known, not an oversight.
+
+**`tmpfile` was fixed on the way in, so this copy is not byte-identical to
+night-watchman's.** It took no argument and echoed its path, which meant every
+caller wrote `f=$(tmpfile)` — a command substitution, so the cleanup trap it
+registered fired in that subshell and deleted the file before the caller saw
+the path. The caller then recreated it at the default umask. Measured: mode
+0644 rather than the documented 0600, and the file leaked into `TMPDIR` on
+every run, so neither guarantee the header promised actually held. It now takes
+a variable name (`tmpfile ENGINE`) and assigns into the caller's shell, where
+the trap works. `scripts/kit-selftest.sh` covers it and is red on four
+assertions against the original file.
+
+homelab hit the identical bug in `scripts/lib/labkit.sh` and fixed it the other
+way, under LAB-103: it kept the `f=$(tmpfile)` signature and moved the registry
+from a shell variable into a *file*, which survives the subshell. That is the
+better trade at 30+ call sites; here there were two, so changing the signature
+was cheaper than carrying a registry file that itself needs cleaning up. Worth
+knowing before assuming the two libraries should converge — they solved the
+same defect deliberately differently. Worth knowing too what it cost there:
+3,523 leaked temp files on the owner's Mac, some holding real 1Password field
+values. This is not a cosmetic class of bug.
+
+One hazard inherited with the pattern, which homelab filed as LAB-104: bash
+keeps **one** EXIT handler, so a script that sets its own `trap ... EXIT`
+silently replaces `_kit_cleanup` and stops cleaning up. Nothing sourcing
+`kit.sh` traps EXIT today, but `git-retry.sh` and `land-queue.sh` both do, so
+the collision is one `source` away. It is called out in `kit.sh`'s header at
+the point of use. If a caller ever needs both, add a `kit_on_exit` registration
+the way labkit did rather than trapping directly.
+
+### Paths are the caller's, and cwd is what resolves them
+
+`known-issue.sh` takes its target from `git rev-parse --show-toplevel`, not
+from its own location, which is what makes it work at all when invoked by
+absolute path from outside — the surface every script here is consumed on.
+There is **no `--root` flag**; that is NWM-145 and still open. So the repo a
+call lands in is decided by cwd: run it with cwd inside the repo being managed,
+never inside this one, or it writes `docs/known-issues/` into ai-toolkit. From
+a worktree with drifted cwd it silently targets the wrong repo. Until NWM-145
+lands, that is a precondition callers must hold, not something the script
+checks.
+
+**No `known-issue` composite action is published, and that is deliberate.**
+NWM-128's text asks for one, written when this repo did not yet exist (it still
+carries `Blocked_by: ai-toolkit existing and publishing the action`). The
+consuming side chose otherwise: night-watchman resolves the ai-toolkit copy by
+env var and checkout path, the way `work-order-root.sh` already resolves its
+dependency, rather than through a pinned `@v1` action. Do not read the missing
+action as an oversight to correct. The general point stands though — the
+`scripts/` surface cannot serve a CI consumer, because a GitHub runner has no
+absolute-path checkout to invoke; a CI consumer needs either its own checkout
+step or an action.
 
 ## `actions/`
 

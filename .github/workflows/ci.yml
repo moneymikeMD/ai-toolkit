@@ -38,7 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: shellcheck -S warning scripts/*.sh actions/*/*.sh
+      - run: shellcheck -S warning scripts/*.sh scripts/lib/*.sh actions/*/*.sh
 
   self-lint:
     runs-on: ubuntu-latest
