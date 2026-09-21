@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.6.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.5.0...v1.6.0) (2026-09-21)
+
+
+### Features
+
+* add skill-routing, a zero-token SKILL.md description routing check ([fadf40c](https://github.com/moneymikeMD/ai-toolkit/commit/fadf40c540786e9306365ef79579241b31c98a4f))
+* bar-check, a diff-scoped CI check for a quality bar being lowered ([14b73e6](https://github.com/moneymikeMD/ai-toolkit/commit/14b73e65644c36273b1b7ffcbc77082c0727bf74))
+
+
+### Bug Fixes
+
+* bar-check's declared exceptions no longer widen silently ([270fed3](https://github.com/moneymikeMD/ai-toolkit/commit/270fed3eebd8a60f61a72e54130b0ad20981f868))
+* skill-routing masked usage errors and miscounted the rank-1 rate ([4183ced](https://github.com/moneymikeMD/ai-toolkit/commit/4183ced54c68edc39f3ea9fbce042f3fa191759e))
+
 ## [1.5.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.4.1...v1.5.0) (2026-09-20)
 
 
