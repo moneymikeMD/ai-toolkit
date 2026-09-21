@@ -1,0 +1,75 @@
+name: skill-routing
+description: Rank SKILL.md descriptions against prompt fixtures and fail when two descriptions collide.
+author: Mike Garrett
+
+inputs:
+  roots:
+    description: Space-separated dirs to scan for SKILL.md, each optionally LABEL=DIR. Defaults to the caller's checkout.
+    required: false
+    default: ""
+  fixtures:
+    description: JSON prompt fixture file the consuming repo owns. Without it only the collision check runs.
+    required: false
+    default: ""
+  allow:
+    description: JSON file of collision pairs the consuming repo has accepted, the per-repo half of this generic rule.
+    required: false
+    default: ""
+  similarity-error:
+    description: Cosine similarity at or above which a description pair fails the build.
+    required: false
+    default: "0.75"
+  similarity-warn:
+    description: Cosine similarity at or above which a description pair is reported without failing.
+    required: false
+    default: "0.50"
+  rank1-floor:
+    description: Fraction of positive prompts that must rank their own skill first.
+    required: false
+    default: "1.0"
+  top-k:
+    description: A positive prompt passes when its skill lands inside this many results.
+    required: false
+    default: "1"
+  report-only:
+    description: Report violations without failing the build. Use while a repo still has a collision backlog. A usage error still fails.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        INPUT_ROOTS: ${{ inputs.roots }}
+        INPUT_FIXTURES: ${{ inputs.fixtures }}
+        INPUT_ALLOW: ${{ inputs.allow }}
+        INPUT_SIMILARITY_ERROR: ${{ inputs.similarity-error }}
+        INPUT_SIMILARITY_WARN: ${{ inputs.similarity-warn }}
+        INPUT_RANK1_FLOOR: ${{ inputs.rank1-floor }}
+        INPUT_TOP_K: ${{ inputs.top-k }}
+        INPUT_REPORT_ONLY: ${{ inputs.report-only }}
+      run: |
+        set -uo pipefail
+        args=(--similarity-error "$INPUT_SIMILARITY_ERROR"
+              --similarity-warn "$INPUT_SIMILARITY_WARN"
+              --rank1-floor "$INPUT_RANK1_FLOOR"
+              --top-k "$INPUT_TOP_K")
+        [ -n "$INPUT_FIXTURES" ] && args+=(--fixtures "$INPUT_FIXTURES")
+        [ -n "$INPUT_ALLOW" ] && args+=(--allow "$INPUT_ALLOW")
+        if [ -n "$INPUT_ROOTS" ]; then
+          read -r -a roots <<<"$INPUT_ROOTS"
+          args+=("${roots[@]}")
+        fi
+        if python3 "${{ github.action_path }}/skill-routing.py" "${args[@]}"; then
+          status=0
+        else
+          status=$?
+        fi
+        # Only exit 1 is "violations found". Exit 2 and 127 mean the check never
+        # ran, and masking those leaves a permanently green, permanently inert job.
+        if [ "$INPUT_REPORT_ONLY" = "true" ] && [ "$status" -eq 1 ]; then
+          echo "::notice::skill-routing found violations; report-only is set, not failing the build"
+          exit 0
+        fi
+        exit "$status"

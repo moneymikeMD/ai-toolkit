@@ -1,0 +1,55 @@
+name: skill-routing
+
+on:
+  workflow_call:
+    inputs:
+      roots:
+        type: string
+        required: false
+        default: ""
+      fixtures:
+        type: string
+        required: false
+        default: ""
+      allow:
+        type: string
+        required: false
+        default: ""
+      similarity-error:
+        type: string
+        required: false
+        default: "0.75"
+      similarity-warn:
+        type: string
+        required: false
+        default: "0.50"
+      rank1-floor:
+        type: string
+        required: false
+        default: "1.0"
+      top-k:
+        type: string
+        required: false
+        default: "1"
+      report-only:
+        type: string
+        required: false
+        default: "false"
+
+jobs:
+  skill-routing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # A reusable workflow's `uses: ./path` resolves against the CALLER's
+      # checkout, not this repo, so the action is referenced by full ref.
+      - uses: moneymikeMD/ai-toolkit/actions/skill-routing@v1
+        with:
+          roots: ${{ inputs.roots }}
+          fixtures: ${{ inputs.fixtures }}
+          allow: ${{ inputs.allow }}
+          similarity-error: ${{ inputs.similarity-error }}
+          similarity-warn: ${{ inputs.similarity-warn }}
+          rank1-floor: ${{ inputs.rank1-floor }}
+          top-k: ${{ inputs.top-k }}
+          report-only: ${{ inputs.report-only }}

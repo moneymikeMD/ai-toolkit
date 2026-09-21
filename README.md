@@ -133,6 +133,104 @@ a header there silently truncates the help text.
 pass that drops a `set -euo pipefail` by an off-by-one can leave every test
 still passing. Strip comments from both versions and diff what is left.
 
+## skill-routing
+
+Nothing tests that a user prompt reaches the right agent skill. Routing
+failures are silent: the wrong `SKILL.md` loads, or none does, and nothing goes
+red. This ranks every discovered skill **description** against a fixture of
+realistic prompts with a stemmed TF-IDF cosine, and reports any pair of
+descriptions similar enough to compete for the same prompt.
+
+Deterministic and zero-token — python3 stdlib, no model call — so it can run on
+every push. It does not replace `claude plugin eval`, which asserts real routing
+against a live model with a `tool_used` grader and costs tokens per case. Use
+both: this one as the gate, that one as the sample.
+
+**The rule that comes with it: a routing failure means fix the description,
+never the prompt.** The prompt is the user, and the user does not get patched.
+
+Three things fail a build. A **description collision** at or above
+`similarity-error` (0.75 by default; 0.50 warns). A **positive** prompt whose
+own skill does not land inside `top-k`. A **negative** prompt whose named
+skill is not outranked by the skill that actually owns it. Below the top-k
+gate, the rank-1 rate over all positives is compared to `rank1-floor`.
+
+A skill id is `LABEL/NAME`, where `NAME` comes from the frontmatter and `LABEL`
+defaults to the basename of the root it was found under. Pass `LABEL=DIR` to
+pin ids across checkout layouts, which matters once one run spans several
+repos.
+
+### As a step
+
+```yaml
+- uses: moneymikeMD/ai-toolkit/actions/skill-routing@v1
+  with:
+    roots: nw=skills
+    fixtures: evals/routing/prompts.json
+    allow: evals/routing/allowed-collisions.json
+    rank1-floor: "1.0"
+    top-k: "1"
+    report-only: "true"
+```
+
+### As a whole job
+
+```yaml
+skill-routing:
+  uses: moneymikeMD/ai-toolkit/.github/workflows/skill-routing.yml@v1
+  with:
+    roots: nw=skills
+    fixtures: evals/routing/prompts.json
+```
+
+### Locally
+
+```bash
+python3 actions/skill-routing/skill-routing.py --list           # what it found
+python3 actions/skill-routing/skill-routing.py a=one/skills b=two/skills
+./actions/skill-routing/skill-routing-selftest.sh               # 18 + 14 assertions
+```
+
+### The split, and what the consuming repo owns
+
+The ranker and the thresholds are generic and live here. The prompt fixtures,
+the rank-1 floor and the accepted-collision list are judgement calls about one
+repo's skills, so they live in that repo — the same split comment-lint uses.
+
+Fixtures are JSON:
+
+```json
+{
+  "positives": [{"prompt": "...", "skill": "nw/session-start"}],
+  "negatives": [{"prompt": "...", "skill": "nw/grill", "owner": "nw/to-issues"}]
+}
+```
+
+Accepted collisions are JSON too, and every pair in the file is a pair someone
+decided not to fix:
+
+```json
+{"collisions": [["homelab/session-start", "night-watchman/session-start"]]}
+```
+
+### Adopting it in a repo that already collides
+
+Start with `report-only: "true"`. A workspace whose skills grew in parallel
+will light up on day one, and a check that reddens every branch before anyone
+can fix it gets disabled rather than obeyed. Fix descriptions, move pairs out
+of the allow file, then turn the gate on. `report-only` masks **violations**
+only. A renamed fixture file, a JSON syntax error or a moved `skills/` dir
+still reddens the build, because a report-only job that also swallows those is
+permanently green whether or not the check ever ran.
+
+Three traps. A prompt sharing **no** stemmed term with any description scores
+zero everywhere; that is reported as a miss, not silently resolved by
+tie-break. A skill with no `description` frontmatter can never be routed at
+all, so it fails outright rather than sitting at rank 0. And two `SKILL.md`
+declaring the same `name` under one label is the worst collision there is —
+only the first is reachable — so it is reported by id and path rather than
+deduplicated away.
+
 ## git-retry
 
 Runs a git command and retries **only** transient network failures. For callers
