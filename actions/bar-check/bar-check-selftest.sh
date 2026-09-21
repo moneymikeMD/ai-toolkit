@@ -135,6 +135,15 @@ run_check "a branch that adds a test and raises a threshold exits zero in report
   strengthened "--report-only" zero "no quality bar lowered"
 
 git -C "$repo" checkout -q main
+git -C "$repo" checkout -q -b evaded
+mkdir -p "$repo/_disabled"
+git -C "$repo" mv tests/test_edges.py _disabled/test_edges.py.bak
+commit "retire a suite by moving it out of the test path"
+
+run_check "a test suite moved out of a test path is reported" evaded "" nonzero \
+  "[test-deleted]" "tests/test_edges.py" "moved out of a test path"
+
+git -C "$repo" checkout -q main
 git -C "$repo" checkout -q -b declared
 printf '// @ts-ignore\nexport const bad: number = "1" as any;\n' >> "$repo/src/app.ts"
 commit "a suppression with nothing declared"
@@ -149,6 +158,74 @@ commit "declare the exception"
 
 run_check "a suppression listed in the allow-file is not reported" declared "" zero \
   "no quality bar lowered" "covered by the allow-file"
+
+# With diff.noprefix on, an unpinned `git diff` reports every path as the raw
+# `diff --git` header line, and no allow-file glob can match it any more.
+git -C "$repo" config diff.noprefix true
+git -C "$repo" config diff.mnemonicPrefix true
+run_check "a caller's own diff config does not stop the allow-file matching" declared "" zero \
+  "no quality bar lowered" "covered by the allow-file"
+git -C "$repo" config --unset diff.noprefix
+git -C "$repo" config --unset diff.mnemonicPrefix
+
+shipped_allow="$HERE/../../.bar-check-allow"
+
+run_shipped() {
+  local label="$1" expect="$2" want="$3" diff_file="$4"
+  local out status
+  out="$(python3 "$HERE/bar-check.py" --diff "$diff_file" --allow-file "$shipped_allow" 2>&1)" \
+    && status=0 || status=$?
+  local ok=1
+  if [ "$expect" = "zero" ] && [ "$status" -ne 0 ]; then ok=0; fi
+  if [ "$expect" = "nonzero" ] && [ "$status" -eq 0 ]; then ok=0; fi
+  if [ -n "$want" ] && ! grep -qF -- "$want" <<<"$out"; then ok=0; fi
+  if [ "$ok" -eq 1 ]; then
+    echo "ok   - $label"
+  else
+    echo "FAIL - $label: exit $status, wanted $expect and '$want'"
+    printf '%s\n' "$out" | sed 's/^/       | /'
+    failed=1
+  fi
+}
+
+cat > "$work/retire.diff" <<'EOF'
+diff --git a/actions/bar-check/bar-check-selftest.sh b/actions/bar-check/bar-check-selftest.sh
+deleted file mode 100755
+--- a/actions/bar-check/bar-check-selftest.sh
++++ /dev/null
+@@ -1,2 +0,0 @@
+-#!/bin/bash
+-echo gone
+EOF
+run_shipped "this repo's own allow-file does not exempt bar-check's tests being deleted" \
+  nonzero "[test-deleted]" "$work/retire.diff"
+
+cat > "$work/moved.diff" <<'EOF'
+diff --git a/actions/bar-check/bar-check-selftest.sh b/actions/bar-check/bar-check-selftest.sh.bak
+similarity index 100%
+rename from actions/bar-check/bar-check-selftest.sh
+rename to actions/bar-check/bar-check-selftest.sh.bak
+EOF
+run_shipped "this repo's own allow-file does not exempt bar-check's tests being moved out" \
+  nonzero "[test-deleted]" "$work/moved.diff"
+
+cat > "$work/quoted.diff" <<'EOF'
+diff --git a/actions/bar-check/bar-check.py b/actions/bar-check/bar-check.py
+--- a/actions/bar-check/bar-check.py
++++ b/actions/bar-check/bar-check.py
+@@ -1,1 +1,2 @@
++    x = detect(line)  # noqa: E501
+EOF
+run_shipped "this repo's own allow-file still exempts the patterns bar-check quotes" \
+  zero "covered by the allow-file" "$work/quoted.diff"
+
+if grep -qE '^\*[[:space:]]' "$shipped_allow"; then
+  echo "FAIL - this repo's own allow-file exempts no category wholesale"
+  printf '%s\n' "$(grep -nE '^\*[[:space:]]' "$shipped_allow")" | sed 's/^/       | /'
+  failed=1
+else
+  echo "ok   - this repo's own allow-file exempts no category wholesale"
+fi
 
 # Extracted from action.yml's own run: block rather than duplicated here,
 # so this test breaks the moment the shipped step diverges from what it checks.
@@ -172,12 +249,12 @@ extract_step_body "$HERE/action.yml" \
   > "$step_body"
 
 run_step() {
-  local label="$1" ref="$2" report_only="$3" expect="$4" base_input="$5"
+  local label="$1" ref="$2" report_only="$3" expect="$4" base_input="$5" before="${6:-}"
   local status
   git -C "$repo" checkout -q "$ref"
   if (cd "$repo" && INPUT_BASE="$base_input" INPUT_HEAD=HEAD \
         INPUT_ALLOW_FILE=.bar-check-allow INPUT_REPORT_ONLY="$report_only" \
-        EVENT_BASE_SHA="" EVENT_BEFORE="" \
+        EVENT_BASE_SHA="" EVENT_BEFORE="$before" \
         bash --noprofile --norc -uo pipefail "$step_body" >/dev/null 2>&1)
   then
     status=0
@@ -201,6 +278,10 @@ run_step "composite step: report-only=false against a clean branch exits 0" \
   strengthened "false" zero "$base"
 run_step "composite step: no resolvable base fails loudly rather than passing empty" \
   strengthened "false" nonzero ""
+run_step "composite step: no resolvable base in report-only mode warns rather than failing" \
+  strengthened "true" zero ""
+run_step "composite step: a first push's all-zero before sha in report-only mode exits 0" \
+  strengthened "true" zero "" "0000000000000000000000000000000000000000"
 
 if [ "$unit_status" -ne 0 ] || [ "$failed" -ne 0 ]; then
   exit 1

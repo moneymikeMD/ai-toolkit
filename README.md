@@ -243,7 +243,7 @@ Five categories, all language-generic, all read off the diff:
 | Category | What it catches |
 | --- | --- |
 | `suppression` | an added `@ts-ignore`, `eslint-disable`, `# noqa`, `# type: ignore`, `// nolint`, `#[allow(…)]`, `@SuppressWarnings`, `# nosec`, `NOSONAR` and kin |
-| `test-deleted` | a test file deleted, or more test declarations removed than added |
+| `test-deleted` | a test file deleted or moved out of a test path, or more test declarations removed than added |
 | `test-skipped` | an added `it.only`, `.skip`, `xit`, `@pytest.mark.skip`, `t.Skip`, `#[ignore]`, `@Disabled` |
 | `assertion-removed` | a surviving test file that ends the diff with fewer assertions than it started with |
 | `threshold-lowered` | a numeric threshold in a config file edited downward, coverage floors in particular |
@@ -264,8 +264,11 @@ suppression is never reported.
 ```
 
 `fetch-depth: 0` is required — the check needs the merge base. With no `base:`
-it uses the pull request's base sha, then the push's before sha, and fails
-loudly rather than passing on an empty diff if neither resolves.
+it uses the pull request's base sha, then the push's before sha. If neither
+resolves it never passes on an empty diff: under `report-only` it emits a
+`::warning::` and exits 0, and as a gate it errors and fails the job. An event
+with no base at all — `workflow_dispatch`, `schedule`, `merge_group`, a
+branch's first push — is therefore safe to add the job to in report-only mode.
 
 ### As a whole job
 
@@ -282,7 +285,7 @@ jobs:
 ```bash
 python3 actions/bar-check/bar-check.py --base origin/main
 python3 actions/bar-check/bar-check.py --diff - < some.patch
-./actions/bar-check/bar-check-selftest.sh    # 25 fixture + 10 real-git assertions
+./actions/bar-check/bar-check-selftest.sh    # 35 fixture + 18 real-git assertions
 ```
 
 ### Declaring an exception
@@ -296,13 +299,27 @@ suppression src/legacy/*.ts @ts-ignore
 
 # Quarantined until the flake is understood.
 test-skipped tests/test_network.py
+
+# The whole vendored tree, every category.
+* third_party/vendor
 ```
 
-`*` in the category column matches any category. The allow-file is never
-scanned as source, so quoting a pattern in order to exempt it does not report
-it. Same reasoning as `no-personal-paths`: an exception you have to write down
-is an exception a reviewer sees in the diff that needs it, and it beats a
-cleverer regex that tries to guess intent.
+`*` in the category column matches any category — prefer naming the categories
+you mean, or the rule stops the check seeing that path's tests deleted too.
+
+In the path column `*` and `?` stop at `/`, so `src/legacy/*.ts` names the
+files in one directory and not the subtree under it; write `src/legacy/**/*.ts`
+for the subtree, or just `src/legacy` — a directory named with no wildcard
+covers everything beneath it.
+
+A `#` opens a comment only as a line's first non-space character. Four of the
+patterns you would put in the substring column start with `#`, so write the
+reason on its own line above the entry, never trailing the rule.
+
+The allow-file is never scanned as source, so quoting a pattern in order to
+exempt it does not report it. Same reasoning as `no-personal-paths`: an
+exception you have to write down is an exception a reviewer sees in the diff
+that needs it, and it beats a cleverer regex that tries to guess intent.
 
 ### Adoption
 

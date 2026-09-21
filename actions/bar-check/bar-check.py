@@ -12,7 +12,8 @@ Five categories, all language-generic and all read off the diff:
 
   suppression        an added @ts-ignore, eslint-disable, # noqa, # type: ignore,
                      // nolint, #[allow(...)], @SuppressWarnings, # nosec and kin
-  test-deleted       a test file deleted, or more test declarations removed than added
+  test-deleted       a test file deleted or moved out of a test path, or more
+                     test declarations removed than added
   test-skipped       an added it.only, .skip, xit, @pytest.mark.skip, t.Skip, #[ignore]
   assertion-removed  a surviving test file that ends the diff with fewer assertions
   threshold-lowered  a numeric threshold in a config file edited downward
@@ -35,6 +36,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 CATEGORIES = (
     "suppression",
@@ -45,6 +47,8 @@ CATEGORIES = (
 )
 
 DEFAULT_ALLOW_FILE = ".bar-check-allow"
+
+GLOB_META = re.compile(r"[*?\[]")
 
 SUPPRESSIONS = [
     ("ts-ignore", re.compile(r"@ts-(?:ignore|expect-error|nocheck)")),
@@ -245,6 +249,21 @@ def scan(files):
     findings = []
 
     for f in files:
+        moved_out = (
+            f.old_path != f.path
+            and is_test_path(f.old_path)
+            and not is_test_path(f.path)
+        )
+        if moved_out:
+            findings.append(
+                (
+                    "test-deleted",
+                    f.old_path,
+                    0,
+                    f"test file moved out of a test path -> {f.path}",
+                )
+            )
+
         if f.status == "deleted":
             if is_test_path(f.old_path):
                 findings.append(
@@ -327,14 +346,18 @@ def fmt(v):
 
 
 def read_allow_file(path):
-    """Parse declared exceptions: '<category|*> <path-glob> [<substring>]' per line."""
+    """Parse declared exceptions: '<category|*> <path-glob> [<substring>]' per line.
+
+    A `#` opens a comment only as the line's first non-space character: four of
+    the patterns a substring column has to quote begin with `#`.
+    """
     rules = []
     if not path or not os.path.exists(path):
         return rules
     with open(path, encoding="utf-8") as fh:
         for n, raw in enumerate(fh, start=1):
-            line = raw.split("#", 1)[0].strip()
-            if not line:
+            line = raw.strip()
+            if not line or line.startswith("#"):
                 continue
             parts = line.split(None, 2)
             if len(parts) < 2:
@@ -355,12 +378,42 @@ def read_allow_file(path):
     return rules
 
 
+def _match_segments(path_parts, glob_parts):
+    if not glob_parts:
+        return not path_parts
+    if glob_parts[0] == "**":
+        rest = glob_parts[1:]
+        if not rest:
+            return True
+        return any(
+            _match_segments(path_parts[i:], rest) for i in range(len(path_parts) + 1)
+        )
+    if not path_parts:
+        return False
+    return fnmatch.fnmatchcase(path_parts[0], glob_parts[0]) and _match_segments(
+        path_parts[1:], glob_parts[1:]
+    )
+
+
+def path_matches(path, glob):
+    """Match a repo-relative path against an allow-file path glob.
+
+    `*` and `?` stop at `/` and `**` crosses it, so a rule naming one directory
+    cannot silently cover the subtree beneath it. A glob with no wildcard at all
+    names either that exact path or a directory, and a directory covers its
+    subtree.
+    """
+    if _match_segments(path.split("/"), glob.split("/")):
+        return True
+    return not GLOB_META.search(glob) and path.startswith(glob.rstrip("/") + "/")
+
+
 def allowed(finding, rules):
     category, path, _, evidence = finding
     for rule_cat, glob, substring in rules:
         if rule_cat not in ("*", category):
             continue
-        if not (fnmatch.fnmatch(path, glob) or fnmatch.fnmatch(path, glob + "/*")):
+        if not path_matches(path, glob):
             continue
         if substring and substring not in evidence:
             continue
@@ -369,7 +422,22 @@ def allowed(finding, rules):
 
 
 def git_diff(base, head):
-    cmd = ["git", "diff", "--no-color", "--find-renames", f"{base}...{head}"]
+    # Pinned: a caller's diff.noprefix, diff.mnemonicPrefix, diff.relative or
+    # diff.external rewrites the paths parse_diff reads, and every allow-file
+    # glob then stops matching.
+    cmd = [
+        "git",
+        "-c",
+        "diff.external=",
+        "diff",
+        "--no-ext-diff",
+        "--no-color",
+        "--no-relative",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        "--find-renames",
+        f"{base}...{head}",
+    ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         print(f"bar-check: {' '.join(cmd)} failed: {proc.stderr.strip()}", file=sys.stderr)
@@ -487,6 +555,25 @@ def selftest():
         ["test-deleted", "assertion-removed"],
     )
     case(
+        "a test file moved out of a test path is a deleted test",
+        "diff --git a/tests/test_a.py b/_disabled/test_a.py.bak\n"
+        "similarity index 100%\nrename from tests/test_a.py\n"
+        "rename to _disabled/test_a.py.bak\n",
+        ["test-deleted"],
+    )
+    case(
+        "a test file renamed within a test path is not reported",
+        "diff --git a/tests/test_a.py b/tests/test_b.py\n"
+        "similarity index 100%\nrename from tests/test_a.py\nrename to tests/test_b.py\n",
+        [],
+    )
+    case(
+        "a non-test file moved anywhere is not reported",
+        "diff --git a/src/a.py b/lib/a.py\n"
+        "similarity index 100%\nrename from src/a.py\nrename to lib/a.py\n",
+        [],
+    )
+    case(
         "renaming a test is net zero",
         hunk(
             "tests/test_a.py",
@@ -600,6 +687,79 @@ def selftest():
             print(f"FAIL - {name}: want {sorted(want)}, got {got}")
             failed += 1
 
+    def rules_from(text):
+        fd, tmp = tempfile.mkstemp(prefix="bar-check-allow-")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        try:
+            return read_allow_file(tmp)
+        finally:
+            os.unlink(tmp)
+
+    three_suppressions = hunk(
+        "src/legacy/a.py",
+        added=[
+            "import os  # noqa: F401",
+            "import sys  # type: ignore",
+            "x = 1  # pylint: disable=all",
+        ],
+    )
+    deep = hunk("src/legacy/deep/nested/a.ts", added=["// @ts-ignore"])
+
+    parsed_cases = [
+        (
+            "a '#' in the substring column narrows the rule, it does not blank it",
+            three_suppressions,
+            "suppression src/legacy/*.py # noqa\n",
+            ["pylint-disable", "type-ignore"],
+        ),
+        (
+            "a substring written without its '#' still narrows the rule",
+            three_suppressions,
+            "suppression src/legacy/*.py noqa\n",
+            ["pylint-disable", "type-ignore"],
+        ),
+        (
+            "a '#' at the start of a line is still a comment",
+            three_suppressions,
+            "# suppression src/legacy/*.py\n  # indented too\n",
+            ["noqa", "pylint-disable", "type-ignore"],
+        ),
+        (
+            "a path glob's '*' does not cross a directory separator",
+            deep,
+            "suppression src/legacy/*.ts\n",
+            ["ts-ignore"],
+        ),
+        (
+            "'**' crosses separators where '*' does not",
+            deep,
+            "suppression src/legacy/**/*.ts\n",
+            [],
+        ),
+        (
+            "a directory named without a wildcard covers its subtree",
+            deep,
+            "suppression src/legacy\n",
+            [],
+        ),
+        (
+            "a directory glob covers its immediate children",
+            hunk("src/legacy/a.ts", added=["// @ts-ignore"]),
+            "suppression src/legacy/*\n",
+            [],
+        ),
+    ]
+    for name, diff, allow_text, want in parsed_cases:
+        rules = rules_from(allow_text)
+        kept = [f for f in scan(parse_diff(diff)) if not allowed(f, rules)]
+        got = sorted(ev.split(":", 1)[0] for _, _, _, ev in kept)
+        if got == sorted(want):
+            print(f"ok   - {name}")
+        else:
+            print(f"FAIL - {name}: want {sorted(want)}, got {got}")
+            failed += 1
+
     allow_file_diff = hunk(
         ".bar-check-allow", added=["suppression src/legacy/*.ts @ts-ignore"]
     )
@@ -615,7 +775,7 @@ def selftest():
         )
         failed += 1
 
-    total = len(cases) + len(allow_cases) + 1
+    total = len(cases) + len(allow_cases) + len(parsed_cases) + 1
     print(f"\n{total} assertion(s), {total - failed} passed")
     return 1 if failed else 0
 

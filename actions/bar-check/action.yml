@@ -16,7 +16,7 @@ inputs:
     required: false
     default: ".bar-check-allow"
   report-only:
-    description: Report findings without failing the build. Every repo starts here; the gate is switched on per repo afterwards.
+    description: Report findings without failing the build, including when no base commit resolves. Every repo starts here; the gate is switched on per repo afterwards.
     required: false
     default: "true"
 
@@ -37,7 +37,12 @@ runs:
         [ -n "$base" ] || base="${EVENT_BASE_SHA:-}"
         [ -n "$base" ] || base="${EVENT_BEFORE:-}"
         if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-          echo "::error::bar-check has no base commit to diff against. Check out with fetch-depth: 0, or pass base:" >&2
+          msg="bar-check has no base commit to diff against. Check out with fetch-depth: 0, or pass base:"
+          if [ "$INPUT_REPORT_ONLY" = "true" ]; then
+            echo "::warning::$msg"
+            exit 0
+          fi
+          echo "::error::$msg" >&2
           exit 1
         fi
         args=(--base "$base" --head "$INPUT_HEAD" --allow-file "$INPUT_ALLOW_FILE")
