@@ -6,6 +6,18 @@
 # Usage: scripts/known-issue-selftest.sh [path-to-known-issue.sh]
 # Defaults to the sibling scripts/known-issue.sh. Pass an older revision's
 # path to reproduce the RED failures below against pre-fix code.
+#
+# `migrate` is NOT covered here, and this is a gap rather than a decision.
+# known-issue.sh ships the subcommand; its heading-detection was tested only
+# by homelab's separate 337-line selftest, retired under LAB-228. Nothing in
+# this file exercises it.
+#
+# Whoever rebuilds that coverage: assert the exact `entries written: N` count,
+# not a zero exit. Per LAB-123 the failure printed "Migration OK" alongside a
+# plausible, silently-wrong count, because the two scanners cross-checking
+# each other shared one blind spot. Agreement between them was not
+# independence, and an exit code could not see the difference. Only the
+# number could.
 
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
