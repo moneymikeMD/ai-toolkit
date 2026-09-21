@@ -4,3 +4,8 @@ __pycache__/
 .tokensave
 .night-watchman/
 .serena/
+
+# Execution plans handed to a repo-rooted session. Never committed: they
+# name tickets and local paths, and an untracked file here would make
+# land-branch.sh refuse the tree (NWM-150).
+.plan/
