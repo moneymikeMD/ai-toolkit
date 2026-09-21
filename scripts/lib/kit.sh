@@ -5,6 +5,26 @@
 # A helper that does belongs in the consuming repo, not in this one.
 #
 # Usage: source this file, then call die/warn/need/show_help/known_command/tmpfile.
+#
+# tmpfile takes a VARIABLE NAME and assigns into the caller's shell:
+#
+#     tmpfile ENGINE || die "could not create the engine tempfile"
+#
+# Deliberately not `f=$(tmpfile)`. A command substitution runs in a subshell,
+# so the cleanup trap registered there fired and deleted the file before the
+# caller saw the path; the caller then recreated it at the default umask,
+# losing the 0600 and leaking it. Both guarantees this file documents were
+# silently absent until that was fixed. homelab hit the same defect in
+# labkit.sh (LAB-103) and measured 3,523 leaked files, some holding real
+# 1Password values, so treat a regression here as a security bug, not a nit.
+#
+# Two rules for anything calling tmpfile:
+#   - Do not set your own `trap ... EXIT`. bash keeps one handler per signal,
+#     so yours REPLACES the cleanup below and it silently stops running
+#     (homelab filed the same trap as LAB-104). Call the other cleanup from
+#     your handler, or do not trap EXIT.
+#   - Calling tmpfile more than once is safe; each call appends to the
+#     cleanup list rather than re-registering the trap.
 
 # die MESSAGE... — print to stderr, exit 1.
 die() { echo "Error: $*" >&2; exit 1; }
@@ -40,18 +60,8 @@ known_command() {
     return 1
 }
 
-# tmpfile VARNAME — create a 0600 tempfile and assign its path to VARNAME in
-# the CALLER's shell, removing it on exit. Deliberately not `f=$(tmpfile)`:
-# a command substitution runs in a subshell, so the cleanup trap would fire
-# there and delete the file before the caller ever saw the path, leaving the
-# caller to recreate it at the default umask and leak it.
-# Safe to call more than once: each call adds its own path to the cleanup
-# list rather than replacing an earlier trap registration.
-#
-# A script that installs its own `trap ... EXIT` REPLACES the one set here,
-# because bash keeps one handler per signal — cleanup then silently stops and
-# 0600 tempfiles accumulate. Call the other cleanup from your own handler, or
-# do not trap EXIT in a script that uses tmpfile.
+# tmpfile VARNAME — create a 0600 tempfile, assign its path to VARNAME in the
+# caller's shell, remove it on exit. Not `f=$(tmpfile)`; see the header.
 _KIT_TMPFILES=""
 _kit_cleanup() {
     [ -n "$_KIT_TMPFILES" ] || return 0

@@ -2,10 +2,18 @@
 #
 # Selftest for scripts/lib/kit.sh.
 #
-# Covers the two behaviours that fail silently rather than loudly: tmpfile's
-# cleanup when it is called more than once (a second trap registration would
-# drop the first path), and show_help reading the CALLER's header rather than
-# the library's.
+# Weighted at tmpfile, which shipped delivering neither guarantee it documented
+# and failed silently rather than loudly. Guards three regressions:
+#   1. `f=$(tmpfile)` ran the cleanup trap in the command-substitution subshell,
+#      so the path was dead on return and the caller recreated it at the default
+#      umask (0644, not 0600) and leaked it.
+#   2. Registering the trap per call would leave only the last path cleaned up.
+#   3. show_help must read the CALLER's header, not this library's.
+#
+# The path-still-exists assertion is what keeps the cleanup assertion honest:
+# without it, an implementation that deleted eagerly would pass for free. That
+# is not hypothetical — the first draft of this file passed against the broken
+# tmpfile for exactly that reason.
 
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -63,15 +71,8 @@ rm -f "$CALLER"
 check "show_help prints the caller's header and exits 0" "$rc|$out" "0|caller-header-line-one
 caller-header-line-two"
 
-# --- tmpfile ---------------------------------------------------------------
-# Two regressions guarded here, both of which this library shipped with:
-#   1. `f=$(tmpfile)` ran the cleanup trap in the command-substitution subshell,
-#      so the file was gone before the caller saw the path. The caller then
-#      recreated it at the default umask (0644, not 0600) and leaked it.
-#   2. Registering the trap per call would leave only the last path in the
-#      cleanup list.
-# The path-still-exists assertion below is what makes the cleanup assertion
-# non-vacuous: if tmpfile deleted eagerly, cleanup would "pass" for free.
+# --- tmpfile --------------------------------------------------------------
+# See this file's header for what these three guard and why they are paired.
 
 out=$(bash -c '. "$1"; tmpfile f; [ -e "$f" ] && echo "EXISTS $f"' _ "$KIT")
 case "$out" in
@@ -79,11 +80,11 @@ case "$out" in
     *) bad "tmpfile's path exists when it returns (not eaten by a subshell)"; echo "    got: $out" ;;
 esac
 
-mode=$(bash -c '. "$1"; tmpfile f; stat -f "%OLp" "$f" 2>/dev/null || stat -c "%a" "$f"' _ "$KIT")
+mode=$(bash -c '. "$1"; tmpfile f; stat -c "%a" "$f" 2>/dev/null || stat -f "%OLp" "$f"' _ "$KIT")
 check "tmpfile creates the file 0600" "$mode" "600"
 
 # Write through the handle the way a caller does, then confirm 0600 survives.
-mode=$(bash -c '. "$1"; tmpfile f; cat > "$f" <<<body; stat -f "%OLp" "$f" 2>/dev/null || stat -c "%a" "$f"' _ "$KIT")
+mode=$(bash -c '. "$1"; tmpfile f; cat > "$f" <<<body; stat -c "%a" "$f" 2>/dev/null || stat -f "%OLp" "$f"' _ "$KIT")
 check "tmpfile stays 0600 after the caller writes to it" "$mode" "600"
 
 paths=$(bash -c '
