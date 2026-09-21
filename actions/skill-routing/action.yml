@@ -32,7 +32,7 @@ inputs:
     required: false
     default: "1"
   report-only:
-    description: Report violations without failing the build. Use while a repo still has a collision backlog.
+    description: Report violations without failing the build. Use while a repo still has a collision backlog. A usage error still fails.
     required: false
     default: "false"
 
@@ -66,7 +66,9 @@ runs:
         else
           status=$?
         fi
-        if [ "$INPUT_REPORT_ONLY" = "true" ] && [ "$status" -ne 0 ]; then
+        # Only exit 1 is "violations found". Exit 2 and 127 mean the check never
+        # ran, and masking those leaves a permanently green, permanently inert job.
+        if [ "$INPUT_REPORT_ONLY" = "true" ] && [ "$status" -eq 1 ]; then
           echo "::notice::skill-routing found violations; report-only is set, not failing the build"
           exit 0
         fi

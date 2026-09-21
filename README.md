@@ -165,9 +165,11 @@ repos.
 ```yaml
 - uses: moneymikeMD/ai-toolkit/actions/skill-routing@v1
   with:
-    roots: skills
+    roots: nw=skills
     fixtures: evals/routing/prompts.json
     allow: evals/routing/allowed-collisions.json
+    rank1-floor: "1.0"
+    top-k: "1"
     report-only: "true"
 ```
 
@@ -177,7 +179,7 @@ repos.
 skill-routing:
   uses: moneymikeMD/ai-toolkit/.github/workflows/skill-routing.yml@v1
   with:
-    roots: skills
+    roots: nw=skills
     fixtures: evals/routing/prompts.json
 ```
 
@@ -186,7 +188,7 @@ skill-routing:
 ```bash
 python3 actions/skill-routing/skill-routing.py --list           # what it found
 python3 actions/skill-routing/skill-routing.py a=one/skills b=two/skills
-./actions/skill-routing/skill-routing-selftest.sh               # 14 + 8 assertions
+./actions/skill-routing/skill-routing-selftest.sh               # 18 + 14 assertions
 ```
 
 ### The split, and what the consuming repo owns
@@ -216,12 +218,18 @@ decided not to fix:
 Start with `report-only: "true"`. A workspace whose skills grew in parallel
 will light up on day one, and a check that reddens every branch before anyone
 can fix it gets disabled rather than obeyed. Fix descriptions, move pairs out
-of the allow file, then turn the gate on.
+of the allow file, then turn the gate on. `report-only` masks **violations**
+only. A renamed fixture file, a JSON syntax error or a moved `skills/` dir
+still reddens the build, because a report-only job that also swallows those is
+permanently green whether or not the check ever ran.
 
-Two traps. A prompt sharing **no** stemmed term with any description scores
+Three traps. A prompt sharing **no** stemmed term with any description scores
 zero everywhere; that is reported as a miss, not silently resolved by
-tie-break. And a skill with no `description` frontmatter can never be routed at
-all, so it fails outright rather than sitting at rank 0.
+tie-break. A skill with no `description` frontmatter can never be routed at
+all, so it fails outright rather than sitting at rank 0. And two `SKILL.md`
+declaring the same `name` under one label is the worst collision there is —
+only the first is reachable — so it is reported by id and path rather than
+deduplicated away.
 
 ## git-retry
 

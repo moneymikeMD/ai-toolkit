@@ -133,6 +133,62 @@ rm -rf "${work:?}/b/redeploy-copy"
 run_step "composite step: reverting the copy exits 0 again" \
   zero false "$roots"
 
+# report-only is for violations (exit 1). A usage error (exit 2) means the
+# check never ran, and masking it leaves a green job that proves nothing.
+run_step "composite step: report-only does not mask a missing fixture file" \
+  nonzero true "$roots" "$work/does-not-exist.json"
+
+run_step "composite step: report-only does not mask a bad roots path" \
+  nonzero true "a=$work/not-a-directory"
+
+write_skill a/nested redeploy "$ALPHA"
+
+run_step "composite step: a duplicate skill id exits non-zero" \
+  nonzero false "$roots"
+
+if ! grep -q 'duplicate skill id a/redeploy' "$work/out.txt"; then
+  echo "FAIL - the report names the duplicated skill id"
+  wrapper_failed=1
+else
+  echo "ok   - the report names the duplicated skill id"
+fi
+
+rm -rf "${work:?}/a/nested"
+
+if python3 "$HERE/skill-routing.py" --report-onlyy "$work/a" >"$work/out.txt" 2>&1
+then
+  flag_status=0
+else
+  flag_status=$?
+fi
+if [ "$flag_status" -eq 2 ] && grep -q 'unknown flag: --report-onlyy' "$work/out.txt"
+then
+  echo "ok   - a mistyped flag exits 2 and names itself"
+else
+  echo "FAIL - a mistyped flag exits 2 and names itself: got exit $flag_status"
+  sed 's/^/        /' "$work/out.txt"
+  wrapper_failed=1
+fi
+
+# The reusable workflow has no caller yet, so a typo'd pass-through would
+# surface only at the first repo that uses the whole-job form.
+workflow="$HERE/../../.github/workflows/skill-routing.yml"
+action_inputs="$(awk '/^inputs:/{c=1;next} /^[a-z]/{c=0}
+  c && /^  [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$HERE/action.yml" | sort)"
+call_inputs="$(awk '/^    inputs:$/{c=1;next} /^jobs:/{c=0}
+  c && /^      [a-z0-9-]+:$/{gsub(/[ :]/,"");print}' "$workflow" | sort)"
+with_keys="$(awk '/^        with:$/{c=1;next}
+  c && /^          [a-z0-9-]+:/{sub(/:.*/,"");gsub(/ /,"");print}' "$workflow" | sort)"
+if [ -n "$action_inputs" ] && [ "$action_inputs" = "$call_inputs" ] &&
+   [ "$action_inputs" = "$with_keys" ]; then
+  echo "ok   - the reusable workflow passes through exactly the action's inputs"
+else
+  echo "FAIL - the reusable workflow passes through exactly the action's inputs"
+  diff <(echo "$action_inputs") <(echo "$call_inputs") | sed 's/^/        call: /'
+  diff <(echo "$action_inputs") <(echo "$with_keys") | sed 's/^/        with: /'
+  wrapper_failed=1
+fi
+
 if [ "$ranker_status" -ne 0 ] || [ "$wrapper_failed" -ne 0 ]; then
   exit 1
 fi

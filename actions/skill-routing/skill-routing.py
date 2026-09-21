@@ -10,7 +10,7 @@ Usage:
   skill-routing.py --similarity-warn F     # collision warning threshold (0.50)
   skill-routing.py --rank1-floor F         # required rank-1 rate (1.0)
   skill-routing.py --top-k N               # a positive passes inside top N (1)
-  skill-routing.py --report-only           # print everything, always exit 0
+  skill-routing.py --report-only           # exit 0 on violations, not on misuse
   skill-routing.py --selftest              # built-in fixture checks
 
 Deterministic and zero-token: stemmed TF-IDF cosine, python3 stdlib only, no
@@ -194,8 +194,9 @@ def parse_frontmatter(text):
 
 
 def discover(roots):
-    """Every SKILL.md under each root, as (id, path, name, description) tuples."""
-    skills, seen = [], set()
+    """Every SKILL.md under each root as (id, path, name, description) tuples,
+    plus the (id, first path, second path) triples a later file lost a clash on."""
+    skills, seen, dupes = [], {}, []
     for label, root in roots:
         root = os.path.abspath(root)
         for dirpath, dirnames, names in os.walk(root):
@@ -213,10 +214,11 @@ def discover(roots):
             name = fm.get("name") or os.path.basename(dirpath)
             sid = f"{label}/{name}"
             if sid in seen:
+                dupes.append((sid, seen[sid], path))
                 continue
-            seen.add(sid)
+            seen[sid] = path
             skills.append((sid, path, name, fm.get("description", "")))
-    return sorted(skills)
+    return sorted(skills), sorted(dupes)
 
 
 def build_index(docs):
@@ -298,9 +300,11 @@ def evaluate(skills, fixtures, error, warn, allowed, floor, top_k):
     coll = collisions(ids, vectors, error, warn, allowed)
     known = set(ids)
     rows, failures = [], 0
+    seen_positives, rank1_hits = 0, 0
 
     for case in fixtures.get("positives", []):
         want, prompt = case["skill"], case["prompt"]
+        seen_positives += 1
         if want not in known:
             rows.append(("positive", prompt, want, None, 0.0, "UNKNOWN SKILL"))
             failures += 1
@@ -311,6 +315,8 @@ def evaluate(skills, fixtures, error, warn, allowed, floor, top_k):
         if want in order:
             pos = order.index(want) + 1
             ok = pos <= top_k
+            if pos == 1:
+                rank1_hits += 1
             note = f"rank {pos}" + ("" if ok else " MISS")
         else:
             ok = False
@@ -339,9 +345,7 @@ def evaluate(skills, fixtures, error, warn, allowed, floor, top_k):
         if not ok:
             failures += 1
 
-    positives = [r for r in rows if r[0] == "positive"]
-    rank1 = sum(1 for r in positives if r[5].startswith("rank 1")) / len(positives) \
-        if positives else 1.0
+    rank1 = rank1_hits / seen_positives if seen_positives else 1.0
     if rank1 < floor:
         failures += 1
     failures += sum(1 for s, _, tier in coll if tier == "error")
@@ -389,10 +393,11 @@ def selftest():
     import shutil
     import tempfile
 
-    failed = 0
+    failed = ran = 0
 
     def check(name, got, want):
-        nonlocal failed
+        nonlocal failed, ran
+        ran += 1
         if got == want:
             print(f"ok   - {name}")
         else:
@@ -428,9 +433,10 @@ def selftest():
         write("b", "handoff", gamma)
 
         roots = [("a", os.path.join(work, "a")), ("b", os.path.join(work, "b"))]
-        skills = discover(roots)
+        skills, dupes = discover(roots)
         check("discovery finds every SKILL.md", len(skills), 3)
         check("skill ids are label-qualified", skills[0][0], "a/redeploy")
+        check("no duplicate ids in a clean tree", dupes, [])
 
         fx = {"positives": [
             {"prompt": "restart the media stack container and verify it came back",
@@ -471,7 +477,7 @@ def selftest():
         check("distinct descriptions do not collide", (len(coll), fails), (0, 0))
 
         write("b", "redeploy-copy", alpha)
-        skills2 = discover(roots)
+        skills2, _ = discover(roots)
         coll, _, _, fails = evaluate(
             skills2, {}, SIMILARITY_ERROR, SIMILARITY_WARN, set(), 1.0, 1)
         pairs = [p for _, p, tier in coll if tier == "error"]
@@ -485,16 +491,42 @@ def selftest():
               ([t for _, _, t in coll], fails), (["allowed"], 0))
 
         shutil.rmtree(os.path.join(work, "b", "redeploy-copy"))
-        skills3 = discover(roots)
+        skills3, _ = discover(roots)
         coll, _, _, fails = evaluate(
             skills3, {}, SIMILARITY_ERROR, SIMILARITY_WARN, set(), 1.0, 1)
         check("reverting the copy makes the check clean again",
               (len(coll), fails), (0, 0))
+
+        # Two SKILL.md declaring the same name under one label is the worst
+        # routing collision there is, and dedupe-on-id used to hide it.
+        write(os.path.join("a", "nested"), "redeploy", alpha)
+        skills4, dupes4 = discover(roots)
+        check("an identical skill id under one label is reported, not dropped",
+              (len(skills4), [d[0] for d in dupes4]), (3, ["a/redeploy"]))
+        shutil.rmtree(os.path.join(work, "a", "nested"))
+
+        deep = os.path.join(work, "deep")
+        for i in range(12):
+            write("deep", f"filler{i}",
+                  "Restart the container stack and verify the service came "
+                  f"back, variant {i} of this description.")
+        deep_skills, _ = discover([("d", deep)])
+        d_ids = [s[0] for s in deep_skills]
+        d_idf, d_vecs = build_index([tokenize(s[3]) for s in deep_skills])
+        deep_prompt = "restart the container stack and verify the service came back"
+        d_order = [sid for score, sid in rank(deep_prompt, d_ids, d_vecs, d_idf)
+                   if score > 0.0]
+        _, _, deep_rank1, deep_fails = evaluate(
+            deep_skills, {"positives": [{"prompt": deep_prompt,
+                                         "skill": d_order[-1]}]},
+            SIMILARITY_ERROR, 1.01, set(), 1.0, len(d_order))
+        check("a two-digit rank does not count toward the rank-1 rate",
+              (len(d_order) >= 10, deep_rank1 < 1.0, deep_fails > 0),
+              (True, True, True))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
-    total = 14
-    print(f"\n{total} assertion(s), {total - failed} passed")
+    print(f"\n{ran} assertion(s), {ran - failed} passed")
     return 1 if failed else 0
 
 
@@ -517,14 +549,20 @@ def main(argv):
     if "--selftest" in args:
         return selftest()
 
+    valued = {"--similarity-error", "--similarity-warn", "--rank1-floor",
+              "--top-k", "--fixtures", "--allow"}
+    bare = {"--list", "--report-only", "--selftest"}
+    for a in args:
+        if a.startswith("--") and a not in valued and a not in bare:
+            print(f"skill-routing: unknown flag: {a}", file=sys.stderr)
+            return 2
+
     error = read_opt(args, "--similarity-error", SIMILARITY_ERROR, float)
     warn = read_opt(args, "--similarity-warn", SIMILARITY_WARN, float)
     floor = read_opt(args, "--rank1-floor", RANK1_FLOOR, float)
     top_k = read_opt(args, "--top-k", TOP_K, int)
     fixtures_path = read_opt(args, "--fixtures", "", str)
     allow_path = read_opt(args, "--allow", "", str)
-    valued = {"--similarity-error", "--similarity-warn", "--rank1-floor",
-              "--top-k", "--fixtures", "--allow"}
     positional = [a for i, a in enumerate(args)
                   if not a.startswith("--") and not (i and args[i - 1] in valued)]
     roots = [parse_root(a) for a in positional] or [parse_root(".")]
@@ -533,7 +571,7 @@ def main(argv):
             print(f"skill-routing: not a directory: {path}", file=sys.stderr)
             return 2
 
-    skills = discover(roots)
+    skills, dupes = discover(roots)
     if "--list" in args:
         for sid, path, _, desc in skills:
             print(f"{sid}\t{len(tokenize(desc))} tok\t{path}")
@@ -560,6 +598,14 @@ def main(argv):
         for sid in missing:
             print(f"  {sid}", file=sys.stderr)
         failures += len(missing)
+
+    if dupes:
+        print("\nSkills claiming an id another SKILL.md already took, so only the "
+              "first is reachable:", file=sys.stderr)
+        for sid, first, second in dupes:
+            print(f"  duplicate skill id {sid}: {first} and {second}",
+                  file=sys.stderr)
+        failures += len(dupes)
 
     if failures:
         print(f"\nskill-routing: {failures} failure(s).", file=sys.stderr)
