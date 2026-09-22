@@ -156,6 +156,34 @@ with open(triage_meta, "w", encoding="utf-8") as fh:
     json.dump({"agentType": "triage", "description": "unrelated", "toolUseId": "toolu_3"}, fh)
 triage_path = os.path.join(sub_dir, "agent-%s.jsonl" % triage_id)
 w(triage_path, [assistant("2026-09-13T10:06:00Z", "t1", 5, [{"type": "text", "text": "n/a"}])])
+
+# --- NWM-164: a Workflow-tool subagent lives TWO LEVELS DEEPER, under
+# subagents/workflows/wf_<id>/, and a journal.jsonl sits beside it that is
+# not a transcript and must never be counted as one.
+wf_dir = os.path.join(sub_dir, "workflows", "wf_fixture1")
+os.makedirs(wf_dir, exist_ok=True)
+wf_id = "wfagent1"
+with open(os.path.join(wf_dir, "agent-%s.meta.json" % wf_id), "w", encoding="utf-8") as fh:
+    json.dump({"agentType": "script-author", "description": "authored inside a Workflow run",
+               "toolUseId": "toolu_wf1", "spawnDepth": 1, "model": "claude-sonnet-5"}, fh)
+wf_path = os.path.join(wf_dir, "agent-%s.jsonl" % wf_id)
+w(wf_path, [
+    assistant("2026-09-13T10:07:00Z", "wf1", 100, [
+        {"type": "tool_use", "id": "toolu_wfbash", "name": "Bash",
+         "input": {"command": "scripts/workflow-only-widget.sh --check"}},
+    ]),
+    user_tool_result("2026-09-13T10:07:05Z", "toolu_wfbash", False, "ok"),
+])
+
+# Same directory, same .jsonl suffix, not a transcript. Given content that
+# WOULD register if it were ever scanned, so the assertion that it is absent
+# can fail rather than merely being untested.
+w(os.path.join(wf_dir, "journal.jsonl"), [
+    assistant("2026-09-13T10:07:30Z", "journal1", 999, [
+        {"type": "tool_use", "id": "toolu_journal", "name": "Bash",
+         "input": {"command": "scripts/journal-must-not-appear.sh"}},
+    ]),
+])
 PYEOF
 
 # extract: full-session scan
@@ -169,19 +197,21 @@ fi
 
 N_EVENTS=$(wc -l < "$EVENTS" | tr -d ' ')
 # author + rework + lint/selftest + review = 4, plus that same Bash call's own
-# `invoke` event = 5; triage contributes 0.
-if [ "$N_EVENTS" = "5" ]; then
-  ok "extract: exactly 5 events (author, rework, selftest, review, selftest's own invoke); triage skipped"
+# `invoke` event = 5; triage contributes 0. The Workflow-tool subagent adds an
+# author and an invoke of its own (NWM-164) = 7 — those two were the missing
+# population, so the count going up is the fix, not a fixture accident.
+if [ "$N_EVENTS" = "7" ]; then
+  ok "extract: exactly 7 events (5 flat + the Workflow-tool subagent's 2); triage skipped"
 else
-  bad "extract: expected 5 events, got $N_EVENTS ($(cat "$EVENTS"))"
+  bad "extract: expected 7 events, got $N_EVENTS ($(cat "$EVENTS"))"
 fi
 
 if python3 -c "
 import json
 events = [json.loads(l) for l in open('$EVENTS')]
 inv = [e for e in events if e['event'] == 'invoke']
-assert len(inv) == 1, 'expected exactly 1 invoke event, got %d' % len(inv)
-e = inv[0]
+assert len(inv) == 2, 'expected 2 invoke events (author + workflow), got %d' % len(inv)
+e = [x for x in inv if x['agent_id'] == 'author1'][0]
 assert e['script'] == 'scripts/script-analytics-selftest.sh', e['script']
 assert e['cause'] == 'selftest', e['cause']
 assert e['outcome'] == 'pass', e['outcome']
@@ -1447,6 +1477,54 @@ PARITYPY
   fi
 else
   echo "skip - drift guard: claude-cost.py / claude-cost-scan.py not beside the selftest"
+fi
+
+# --- NWM-164: Workflow-tool subagents are two levels deeper. --------------
+# Before this, discover_subagents() listed subagents/ one level deep, so every
+# Workflow-tool agent recorded nothing and "retire?" was computed from a
+# partial population — a wrong answer rather than a missing one.
+WF_EVENTS="$WORK/wf-events.jsonl"
+run extract --projects-dir "$PROJECTS_DIR" --events "$WF_EVENTS" >/dev/null 2>&1
+if grep -q "workflow-only-widget.sh" "$WF_EVENTS"; then
+  ok "workflows: a Bash call made inside subagents/workflows/wf_*/ is recorded"
+else
+  bad "workflows: the Workflow-tool subagent's invoke event is missing entirely"
+fi
+if grep -q "journal-must-not-appear.sh" "$WF_EVENTS"; then
+  bad "workflows: journal.jsonl beside the transcript was scanned as one"
+else
+  ok "workflows: the journal.jsonl beside it is not mistaken for a transcript"
+fi
+
+WF_ONE="$WORK/wf-one.jsonl"
+if run extract --projects-dir "$PROJECTS_DIR" --events "$WF_ONE" --agent-id wfagent1 >/dev/null 2>&1 \
+   && grep -q "workflow-only-widget.sh" "$WF_ONE"; then
+  ok "workflows: --agent-id resolves a nested transcript, not only a flat one"
+else
+  bad "workflows: --agent-id could not find the Workflow-tool subagent"
+fi
+
+WF_COUNTS="$(ANALYTICS="$ANALYTICS" python3 - "$PROJECTS_DIR" <<'PYEOF'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("sa", os.environ["ANALYTICS"])
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+found = m.discover_subagents(sys.argv[1], "-fixture-repo", "sess1")
+print("%d %s" % (len(found), ",".join(sorted(a for a, _p, _mp in found))))
+PYEOF
+)"
+if [ "$WF_COUNTS" = "4 author1,review1,triage1,wfagent1" ]; then
+  ok "workflows: discover_subagents returns both layouts, each exactly once"
+else
+  bad "workflows: discover_subagents returned [$WF_COUNTS], wanted [4 author1,review1,triage1,wfagent1]"
+fi
+
+# The meta.json must be read from beside the transcript, not from the flat
+# subagents/ directory — otherwise a workflow agent has no agentType and is
+# silently skipped as unmatched.
+if grep -q '"agent_type": "script-author"' "$WF_ONE"; then
+  ok "workflows: the nested agent's meta.json is read from its own wf_ directory"
+else
+  bad "workflows: the nested agent's meta.json was not found beside its transcript"
 fi
 
 echo

@@ -19,6 +19,7 @@ Transcript layout this script expects (Claude Code CLI, verified live
     <projects-dir>/<slug>/<session-id>.jsonl
         the main-thread session transcript.
     <projects-dir>/<slug>/<session-id>/subagents/agent-<id>.jsonl
+    <projects-dir>/<slug>/<session-id>/subagents/workflows/wf_<id>/agent-<id>.jsonl
         one file per Agent-tool subagent launched from that session.
     <projects-dir>/<slug>/<session-id>/subagents/agent-<id>.meta.json
         {"agentType": "...", "description": "...", "toolUseId": "toolu_...",
@@ -1175,19 +1176,48 @@ def discover_sessions(projects_dir):
     return sessions
 
 
+# Claude Code writes Agent-tool transcripts directly under subagents/ and
+# Workflow-tool transcripts two levels deeper, under subagents/workflows/wf_*/.
+# Both globs are needed; only agent-*.jsonl matches, so the journal.jsonl each
+# wf_*/ also holds is never mistaken for a transcript (NWM-164, NWM-152).
+SUBAGENT_GLOBS = (
+    ("agent-*.jsonl",),
+    ("workflows", "wf_*", "agent-*.jsonl"),
+)
+
+
+def subagent_transcripts(sub_dir):
+    """Every agent-*.jsonl under sub_dir, in both layouts, sorted."""
+    out = []
+    for parts in SUBAGENT_GLOBS:
+        out.extend(sorted(glob.glob(os.path.join(sub_dir, *parts))))
+    return out
+
+
+def session_dir_of_subagent(jsonl_path):
+    """The <slug>/<session_id> directory a subagent transcript belongs to,
+    for either layout — found by the LAST 'subagents' path component, so a
+    slug that happens to contain the word cannot confuse it."""
+    parts = jsonl_path.split(os.sep)
+    idx = len(parts) - 1 - parts[::-1].index("subagents")
+    return os.sep.join(parts[:idx])
+
+
 def discover_subagents(projects_dir, slug, session_id):
     """Return a list of (agent_id, jsonl_path, meta_path) for every
-    subagent under <projects_dir>/<slug>/<session_id>/subagents/."""
+    subagent under <projects_dir>/<slug>/<session_id>/subagents/, including
+    the Workflow-tool transcripts nested under workflows/wf_*/."""
     sub_dir = os.path.join(projects_dir, slug, session_id, "subagents")
     if not os.path.isdir(sub_dir):
         return []
     out = []
-    for fn in sorted(os.listdir(sub_dir)):
-        if not (fn.startswith("agent-") and fn.endswith(".jsonl")):
-            continue
+    for jsonl_path in subagent_transcripts(sub_dir):
+        fn = os.path.basename(jsonl_path)
         agent_id = fn[len("agent-"): -len(".jsonl")]
-        jsonl_path = os.path.join(sub_dir, fn)
-        meta_path = os.path.join(sub_dir, "agent-%s.meta.json" % agent_id)
+        # Beside the transcript, so a workflow agent's meta is found in its
+        # own wf_*/ rather than in the flat subagents/ directory.
+        meta_path = os.path.join(
+            os.path.dirname(jsonl_path), "agent-%s.meta.json" % agent_id)
         out.append((agent_id, jsonl_path, meta_path))
     return out
 
@@ -1226,21 +1256,24 @@ def find_subagent_paths(projects_dir, agent_id):
     given match (the caller warns, not errors, since the subagent
     transcript alone is still processable without the parent's Agent
     tool_use prompt)."""
-    pattern = os.path.join(projects_dir, "*", "*", "subagents", "agent-%s.jsonl" % agent_id)
-    matches = sorted(glob.glob(pattern))
+    matches = sorted(
+        glob.glob(os.path.join(projects_dir, "*", "*", "subagents",
+                               "agent-%s.jsonl" % agent_id))
+        + glob.glob(os.path.join(projects_dir, "*", "*", "subagents",
+                                 "workflows", "wf_*", "agent-%s.jsonl" % agent_id)))
     if not matches:
         raise ValidationError(
             "--agent-id %s: no matching subagent file found under %s" % (agent_id, projects_dir)
         )
     out = []
     for jsonl_path in matches:
-        sub_dir = os.path.dirname(jsonl_path)
-        session_dir = os.path.dirname(sub_dir)
+        session_dir = session_dir_of_subagent(jsonl_path)
         session_id = os.path.basename(session_dir)
         slug_dir = os.path.dirname(session_dir)
         slug = os.path.basename(slug_dir)
         session_path = os.path.join(slug_dir, session_id + ".jsonl")
-        meta_path = os.path.join(sub_dir, "agent-%s.meta.json" % agent_id)
+        meta_path = os.path.join(
+            os.path.dirname(jsonl_path), "agent-%s.meta.json" % agent_id)
         out.append((slug, session_id, session_path, agent_id, jsonl_path, meta_path))
     return out
 
