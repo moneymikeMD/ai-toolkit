@@ -7,28 +7,22 @@
 # never contacts a host and reads no credential.
 #
 # Subcommands:
-#   migrate                    ONE-SHOT. Parse the hand-written
-#                               docs/known-issues.md, split it into one file
-#                               per entry under docs/known-issues/, and
-#                               regenerate docs/known-issues.md as the index.
-#                               Heading detection is CommonMark fence-aware
-#                               for both ``` and ~~~, including the 0-3-column
-#                               indent bound, and is cross-checked against two
-#                               differently-shaped implementations before
-#                               migrate trusts any of them. Entries are staged
-#                               to a temp dir and verified ENTIRELY FROM DISK
-#                               before going live; any failure leaves the real
-#                               docs/known-issues/ untouched.
-#
-#                               Refuses a second run unless docs/known-issues/
-#                               is empty or --force is given, which additionally
-#                               requires every existing entry to be byte-identical
-#                               to its recorded sha256, present in the fresh
-#                               parse, and not a manifest entry missing from disk.
-#                               A heading with no severity anywhere is never
-#                               guessed at: migrate prints every one with its
-#                               line number unless --accept-severity-defaults
-#                               is given, which defaults them to LOW.
+#   migrate                    ONE-SHOT. Split the hand-written
+#                               docs/known-issues.md into one file per entry
+#                               under docs/known-issues/, then regenerate the
+#                               index. Heading detection is CommonMark
+#                               fence-aware and cross-checked against two
+#                               differently-shaped implementations. Entries
+#                               are staged and verified ENTIRELY FROM DISK
+#                               before going live, so a failure leaves the
+#                               real docs/known-issues/ untouched.
+#                               Refuses a second run unless the directory is
+#                               empty or --force is given, which additionally
+#                               requires every existing entry to match its
+#                               recorded sha256. A heading with no severity is
+#                               never guessed at: every one is printed with
+#                               its line number unless --accept-severity
+#                               -defaults is given, which defaults them LOW.
 #   reindex                    Regenerate docs/known-issues.md from the
 #                               frontmatter of every file under
 #                               docs/known-issues/. Idempotent — running it
@@ -38,40 +32,46 @@
 #   resolve <slug>              Mark an entry resolved (status + date) and
 #                               reindex.
 #   severity <slug> <SEV>       Change an entry's severity and reindex.
-#   lint                        Verify every entry file parses, has the
-#                               required frontmatter, has a unique slug,
-#                               that its sha256 still matches
-#                               _manifest.json (catching any edit that
-#                               bypassed add/resolve/severity), and that
+#   remanifest <slug>...        Re-record the sha256 of the named entries, so
+#                               a lint that failed on drift can be made green
+#                               deliberately. Per-slug and printed; no --all,
+#                               because acceptance must be an act and not a
+#                               rubber stamp. Touches only _manifest.json: it
+#                               never rewrites an entry and never reindexes.
+#   remanifest --drop <slug>... Drop the record of an entry whose file is
+#                               GONE. Separate because it is a delete: it
+#                               refuses a slug whose file is still there, and
+#                               re-recording refuses one whose file is not.
+#   lint                        Verify every entry parses, has the required
+#                               frontmatter and a unique slug, still matches
+#                               its sha256 in _manifest.json, and that
 #                               docs/known-issues.md is exactly what
-#                               `reindex` would produce right now. Non-zero
-#                               exit on any failure — this is the guard that
-#                               keeps the index (and the manifest) from
-#                               drifting again, and it is the check CI runs
-#                               on every push.
+#                               `reindex` would produce. Non-zero on any
+#                               failure; the check CI runs on every push. A
+#                               manifest failure names `remanifest` as the
+#                               way back to green.
 #
 # Every subcommand answers -h/--help on its own; run with no arguments for
 # the same text this comment carries.
 #
 # Global option, recognised anywhere in the argument list:
 #   --root PATH   the repo to manage. Without it the repo comes from the
-#                  CALLER'S cwd, kept as the default for the plugin case.
-#                  A caller whose cwd has drifted then writes its entry and
-#                  its regenerated index into whichever repo cwd is in, exit 0
-#                  and silent; twice already (NWM-122, NWM-142).
+#                  CALLER'S cwd, kept as the default for the plugin case. A
+#                  caller whose cwd has drifted then writes into whichever
+#                  repo cwd is in, silently; twice already (NWM-122, NWM-142).
 #
 # Frontmatter fields (docs/known-issues/<slug>.md):
 #   title        entry title, without the trailing severity/status suffix
-#   heading_raw  the ORIGINAL '## ' heading line, verbatim, minus the '## '.
-#                The lossless backstop: migrate asserts every heading in the
-#                source reconstructs from some entry's heading_raw.
-#   severity     exactly one of HIGH | MEDIUM | LOW | COSMETIC (CRITICAL in
-#                the original doc folds into HIGH — there is no fifth bucket)
+#   heading_raw  the ORIGINAL '## ' heading, verbatim, minus the '## '. The
+#                lossless backstop: migrate asserts every source heading
+#                reconstructs from some entry's heading_raw.
+#   severity     one of HIGH | MEDIUM | LOW | COSMETIC (CRITICAL folds into
+#                HIGH — there is no fifth bucket)
 #   status       open | resolved
 #   resolved     YYYY-MM-DD — present only when status is resolved
-#   qualifiers   [ "...", ... ] — best-effort extraction of whatever the
-#                heading suffix said beyond severity/status/date. May be empty.
-#   note         optional one-line note (was: index-row text after the em-dash)
+#   qualifiers   [ "...", ... ] — whatever the heading suffix said beyond
+#                severity/status/date. May be empty.
+#   note         optional one-line note (the index row after the em-dash)
 #   tickets      [ "PREFIX-nnn", ... ] — may be empty
 #   slug         the file's own slug, for round-trip safety
 #
@@ -232,29 +232,34 @@ def check_manifest(entries_dir, entries):
     manifest = load_manifest(entries_dir)
     if manifest is None:
         return ["%s is missing — no record of what this tool last wrote, so "
-                "a hand-edit to any entry would go undetected. Run add, "
-                "resolve or severity once to create it." %
-                manifest_path(entries_dir)]
+                "a hand-edit to any entry would go undetected. Recreate it "
+                "with `known-issue.sh remanifest <slug>...`, naming every "
+                "entry you are vouching for." % manifest_path(entries_dir)]
     errors = []
     present_slugs = set()
     for meta, body, relpath, path in entries:
         present_slugs.add(meta["slug"])
         recorded = manifest.get(meta["slug"])
         if recorded is None:
-            errors.append("%s has no entry in %s — never recorded" %
-                           (path, manifest_path(entries_dir)))
+            errors.append(
+                "%s has no entry in %s — never recorded. Accept it with "
+                "`known-issue.sh remanifest %s`." %
+                (path, manifest_path(entries_dir), meta["slug"]))
         elif recorded != file_hash(path):
             errors.append(
                 "%s does not match its recorded sha256 in %s — edited by "
                 "something other than add/resolve/severity since it was "
-                "last written" % (path, manifest_path(entries_dir)))
+                "last written. If that edit was intended, accept it with "
+                "`known-issue.sh remanifest %s`." %
+                (path, manifest_path(entries_dir), meta["slug"]))
     for slug in sorted(manifest):
         if slug not in present_slugs:
             errors.append(
                 "%s is recorded in %s but %s does not exist — deleted since "
-                "it was written" % (
+                "it was written. If that deletion was intended, drop the "
+                "record with `known-issue.sh remanifest --drop %s`." % (
                     slug, manifest_path(entries_dir),
-                    os.path.join(entries_dir, slug + ".md")))
+                    os.path.join(entries_dir, slug + ".md"), slug))
     return errors
 
 SEV_ORDER = ["HIGH", "MEDIUM", "LOW", "COSMETIC"]
@@ -1386,6 +1391,87 @@ def cmd_reindex(args):
     return 0
 
 
+def cmd_remanifest(args):
+    """Re-record the sha256 of named entries, or drop named records whose
+    file is gone. The only supported way back to a green lint once an entry
+    has drifted; acceptance is per-slug and printed, never blanket, and it
+    is all-or-nothing so a bad slug writes nothing."""
+    manifest = load_manifest(args.entries_dir)
+    if manifest is None:
+        manifest = {}
+    slugs = args.slug
+    dupes = sorted({x for x in slugs if slugs.count(x) > 1})
+    if dupes:
+        print("Error: slug named more than once: %s" % ", ".join(dupes),
+              file=sys.stderr)
+        return 1
+
+    mpath = manifest_path(args.entries_dir)
+    errors, actions = [], []
+    for slug in slugs:
+        path = os.path.join(args.entries_dir, slug + ".md")
+        exists = os.path.isfile(path)
+        if args.drop:
+            if exists:
+                errors.append(
+                    "%s still exists — --drop removes the record of a file "
+                    "that is GONE. Re-record it instead, without --drop."
+                    % path)
+            elif slug not in manifest:
+                errors.append("%s is not recorded in %s — nothing to drop"
+                              % (slug, mpath))
+            else:
+                actions.append((slug, manifest[slug], None))
+        elif not exists:
+            errors.append(
+                "%s does not exist — if the entry is gone on purpose, drop "
+                "its record with --drop" % path)
+        else:
+            actions.append((slug, manifest.get(slug), file_hash(path)))
+
+    if errors:
+        print("Error:", file=sys.stderr)
+        for e in errors:
+            print(" - " + e, file=sys.stderr)
+        return 1
+
+    changed = 0
+    for slug, old, new in actions:
+        if new is None:
+            del manifest[slug]
+            print("dropped  %s (was %s)" % (slug, old))
+            changed += 1
+        elif old == new:
+            print("current  %s (%s) — already recorded, nothing to accept"
+                  % (slug, new))
+        else:
+            manifest[slug] = new
+            print("recorded %s\n            was %s\n            now %s"
+                  % (slug, old if old else "(never recorded)", new))
+            changed += 1
+
+    if changed:
+        save_manifest(args.entries_dir, manifest)
+        print("%s: %d record(s) changed" % (mpath, changed))
+    else:
+        print("%s: no change" % mpath)
+
+    # Accepting a hash and regenerating the index are separate acts, so this
+    # says the index is stale rather than quietly fixing it.
+    entries, err = load_all_entries_safe(args.entries_dir)
+    if err is None and entries:
+        expected = build_index(
+            [(meta, relpath) for meta, body, relpath, path in entries])
+        actual = None
+        if os.path.exists(args.index_file):
+            with open(args.index_file) as fh:
+                actual = fh.read()
+        if actual != expected:
+            print("note: %s is not what `reindex` would produce — run "
+                  "`known-issue.sh reindex`" % args.index_file)
+    return 0
+
+
 def cmd_lint(args):
     entries, err = load_all_entries_safe(args.entries_dir)
     if err is not None:
@@ -1586,10 +1672,16 @@ def main():
     s.add_argument("--slug", required=True)
     s.add_argument("--severity", required=True, choices=SEV_ORDER)
 
+    rm = sub.add_parser("remanifest")
+    common(rm)
+    rm.add_argument("--slug", action="append", required=True)
+    rm.add_argument("--drop", action="store_true")
+
     args = p.parse_args()
     fn = {
         "migrate": cmd_migrate, "reindex": cmd_reindex, "lint": cmd_lint,
         "add": cmd_add, "resolve": cmd_resolve, "severity": cmd_severity,
+        "remanifest": cmd_remanifest,
     }[args.cmd]
     return fn(args)
 
@@ -1666,6 +1758,27 @@ EOF
     exit 0
 }
 
+usage_remanifest() {
+    cat <<EOF
+known-issue.sh remanifest <slug>... [--root PATH]
+known-issue.sh remanifest --drop <slug>... [--root PATH]
+
+Re-record what this tool believes it wrote, so a lint that failed on manifest
+drift has a supported way back to green.
+
+Without --drop, each named slug's file must exist; its current sha256 is
+recorded. With --drop, each named slug's file must be GONE and its record is
+removed. Naming a slug the other way round is refused rather than guessed.
+
+There is no --all: acceptance is an act, and a blanket one is a rubber stamp.
+Nothing is written unless every named slug is valid, and every change is
+printed. Only _manifest.json is touched — no entry is rewritten and the index
+is not regenerated, so a stale index is reported and left for \`reindex\`.
+EOF
+    exit 0
+}
+
+
 usage_add() {
     cat <<EOF
 Usage: known-issue.sh add --title TITLE --severity SEV [--note NOTE]
@@ -1720,7 +1833,7 @@ case "$1" in
 esac
 
 CMD="$1"; shift
-known_command "$CMD" migrate reindex add resolve severity lint \
+known_command "$CMD" migrate reindex add resolve severity lint remanifest \
     || die "unknown subcommand: $CMD (try --help)"
 
 case "$CMD" in
@@ -1797,6 +1910,34 @@ case "$CMD" in
                      --title "$TITLE" --severity "$SEVERITY" --body-file "$BODY_FILE")
         [ -n "$NOTE" ] && ENGINE_ARGS+=(--note "$NOTE")
         [ -n "$TICKETS" ] && ENGINE_ARGS+=(--tickets "$TICKETS")
+        run_engine "${ENGINE_ARGS[@]}"
+        ;;
+
+    remanifest)
+        # No `[ $# -ge 1 ] || usage_remanifest` as the other subcommands have:
+        # a caller scripting `remanifest $SLUGS` with SLUGS empty must not get
+        # exit 0. -h still prints the usage; nothing at all is an error.
+        DROP=0
+        SLUGS=()
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --drop) DROP=1; shift ;;
+                -h|--help) usage_remanifest ;;
+                -*) die "remanifest: unknown option: $1 (try --help)" ;;
+                *) SLUGS+=("$1"); shift ;;
+            esac
+        done
+        [ ${#SLUGS[@]} -ge 1 ] || die "remanifest: name at least one slug (there is no --all)"
+        [ -d "$ENTRIES_DIR" ] || die "no entries yet — run 'migrate' first"
+        # Shape only. Existence is the engine's to judge, because --drop wants
+        # a slug whose file is gone and re-recording wants one whose file is not.
+        for SLUG in "${SLUGS[@]}"; do
+            valid_slug_shape "$SLUG" \
+                || die "remanifest: not a valid slug (want lowercase letters/digits/hyphens, no leading/trailing/doubled hyphen): $SLUG"
+        done
+        ENGINE_ARGS=(remanifest --entries-dir "$ENTRIES_DIR" --index-file "$INDEX_FILE")
+        [ "$DROP" = 1 ] && ENGINE_ARGS+=(--drop)
+        for SLUG in "${SLUGS[@]}"; do ENGINE_ARGS+=(--slug "$SLUG"); done
         run_engine "${ENGINE_ARGS[@]}"
         ;;
 
