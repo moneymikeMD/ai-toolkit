@@ -1,0 +1,68 @@
+{
+  "fetched_at": "2026-09-22T05:12:49Z",
+  "repos": [
+    {
+      "code_owner": "none",
+      "default_branch": "main",
+      "landing": "checks",
+      "name": "alpha",
+      "required_checks": [
+        "ci-a",
+        "ci-b"
+      ],
+      "rulesets": 1,
+      "slug": "t/alpha",
+      "visibility": "public"
+    },
+    {
+      "code_owner": "@owner",
+      "default_branch": "main",
+      "landing": "review",
+      "name": "bravo",
+      "required_checks": "none",
+      "rulesets": 2,
+      "slug": "t/bravo",
+      "visibility": "public"
+    },
+    {
+      "code_owner": "unavailable",
+      "default_branch": "main",
+      "landing": "unavailable",
+      "name": "charlie",
+      "required_checks": "unavailable",
+      "rulesets": "unavailable",
+      "slug": "t/charlie",
+      "visibility": "private"
+    },
+    {
+      "code_owner": "none",
+      "default_branch": "main",
+      "landing": "direct",
+      "name": "delta",
+      "required_checks": "none",
+      "rulesets": 1,
+      "slug": "t/delta",
+      "visibility": "public"
+    },
+    {
+      "code_owner": "none",
+      "default_branch": "main",
+      "landing": "direct",
+      "name": "echo",
+      "required_checks": "none",
+      "rulesets": 1,
+      "slug": "t/echo",
+      "visibility": "public"
+    },
+    {
+      "code_owner": "none",
+      "default_branch": "main",
+      "landing": "direct",
+      "name": "foxtrot",
+      "required_checks": "none",
+      "rulesets": 0,
+      "slug": "t/foxtrot",
+      "visibility": "public"
+    }
+  ]
+}

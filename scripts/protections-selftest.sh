@@ -11,12 +11,14 @@
 # at a time and asserts --check exits non-zero naming that repo — a --check
 # that has never been seen to fail is not known to work.
 #
-# Usage: protections-selftest.sh
+# Usage: protections-selftest.sh [path-to-protections.sh]
+# Defaults to the sibling protections.sh. Pass an older revision's path to
+# reproduce the RED failures against pre-fix code.
 
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUT="$HERE/protections.sh"
+SUT="${1:-$HERE/protections.sh}"
 PASS=0
 FAIL=0
 
@@ -273,6 +275,119 @@ check "the payload carries the landing decision" "checks" \
 import json
 d = json.load(open('$WORK/facts.json'))
 print([r for r in d['repos'] if r['name'] == 'alpha'][0]['landing'])")"
+
+echo "== required_approvals reaches the payload"
+check "an approving-review count is emitted, not just used to pick landing" "1" \
+    "$(python3 -c "
+import json
+d = json.load(open('$WORK/facts.json'))
+print([r for r in d['repos'] if r['name'] == 'bravo'][0]['required_approvals'])")"
+check "zero approvals is emitted as 0, not omitted" "0" \
+    "$(python3 -c "
+import json
+d = json.load(open('$WORK/facts.json'))
+print([r for r in d['repos'] if r['name'] == 'alpha'][0]['required_approvals'])")"
+check "a repo with no rulesets at all still reports a count" "0" \
+    "$(python3 -c "
+import json
+d = json.load(open('$WORK/facts.json'))
+print([r for r in d['repos'] if r['name'] == 'foxtrot'][0]['required_approvals'])")"
+check "unavailable is carried here too, never collapsed to 0" "unavailable" \
+    "$(python3 -c "
+import json
+d = json.load(open('$WORK/facts.json'))
+print([r for r in d['repos'] if r['name'] == 'charlie'][0]['required_approvals'])")"
+
+echo "== --emit-json - puts the payload on stdout and nothing else"
+"$SUT" --root "$WS" --check --emit-json - > "$WORK/stdout.json" 2> "$WORK/stdout.err"
+check "--emit-json - exits 0" "0" "$?"
+check "stdout parses as JSON with every repo" "6" \
+    "$(python3 -c "import json;print(len(json.load(open('$WORK/stdout.json'))['repos']))" 2>/dev/null || echo "NOT-JSON")"
+check "the per-repo table moved to stderr" "yes" \
+    "$(grep -q '^alpha ' "$WORK/stdout.err" && echo yes || echo no)"
+check "and is not on stdout, where it would corrupt the payload" "no" \
+    "$(grep -q '^alpha ' "$WORK/stdout.json" && echo yes || echo no)"
+
+echo "== --store resolution refuses before any fetching"
+cat > "$WORK/fake-ws" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$WS_STUB_LOG"
+cat "${4:-/dev/null}" > "$WS_STUB_PAYLOAD" 2>/dev/null || true
+exit "${WS_STUB_EXIT:-0}"
+STUB
+chmod +x "$WORK/fake-ws"
+export WS_STUB_LOG="$WORK/ws-calls.log"
+export WS_STUB_PAYLOAD="$WORK/ws-payload.json"
+
+# Structural, not incidental: every path protections.sh can resolve a CLI on
+# must land somewhere harmless. A resolution bug in this script wrote six
+# fixture repos into the live postgres before this existed.
+cat > "$BIN/workspace-state" <<'REFUSE'
+#!/usr/bin/env bash
+echo "selftest: the real workspace-state must never be reached from here" >&2
+exit 97
+REFUSE
+chmod +x "$BIN/workspace-state"
+
+WORKSPACE_STATE_BIN="$WORK/no-such-cli" "$SUT" --root "$WS" --store >/dev/null 2>&1
+check "a WORKSPACE_STATE_BIN that is not executable exits 2" "2" "$?"
+# The LAB-228 shape: a harness writing --store with an empty override must not
+# silently fall through to whatever happens to be on PATH.
+WORKSPACE_STATE_BIN="" "$SUT" --root "$WS" --store >"$WORK/emptybin.out" 2>&1
+check "a set-but-empty WORKSPACE_STATE_BIN exits 2" "2" "$?"
+check "and says the variable is empty" "yes" \
+    "$(grep -q 'WORKSPACE_STATE_BIN is set but empty' "$WORK/emptybin.out" && echo yes || echo no)"
+check "it never fell through to a resolved CLI" "no" \
+    "$(grep -q 'selftest: the real workspace-state' "$WORK/emptybin.out" && echo yes || echo no)"
+
+echo "== --store is a write, so it refuses the read-only modes"
+WORKSPACE_STATE_BIN="$WORK/fake-ws" "$SUT" --root "$WS" --store --check >"$WORK/sc.out" 2>&1
+check "--store --check exits 2" "2" "$?"
+check "and names the mode it conflicts with" "yes" \
+    "$(grep -q 'cannot be combined with --check' "$WORK/sc.out" && echo yes || echo no)"
+WORKSPACE_STATE_BIN="$WORK/fake-ws" "$SUT" --root "$WS" --store --dry-run >/dev/null 2>&1
+check "--store --dry-run exits 2" "2" "$?"
+WORKSPACE_STATE_BIN="$WORK/fake-ws" "$SUT" --root "$WS" --store --emit-json - >/dev/null 2>&1
+check "--store --emit-json - exits 2, because the CLI needs a file" "2" "$?"
+check "none of those refusals called the CLI" "0" \
+    "$([ -f "$WS_STUB_LOG" ] && wc -l < "$WS_STUB_LOG" | tr -d ' ' || echo 0)"
+
+echo "== --store hands the CLI the payload"
+: > "$WS_STUB_LOG"
+WORKSPACE_STATE_BIN="$WORK/fake-ws" "$SUT" --root "$WS" --store >"$WORK/store.out" 2>&1
+check "--store exits 0 when the CLI does" "0" "$?"
+check "it called protections set --file PATH exactly once" "1" \
+    "$(grep -c '^protections set --file /' "$WS_STUB_LOG")"
+check "the CLI received every repo" "6" \
+    "$(python3 -c "import json;print(len(json.load(open('$WS_STUB_PAYLOAD'))['repos']))" 2>/dev/null || echo "NOT-JSON")"
+check "the payload it received carries required_approvals" "1" \
+    "$(python3 -c "
+import json
+d = json.load(open('$WS_STUB_PAYLOAD'))
+print([r for r in d['repos'] if r['name'] == 'bravo'][0]['required_approvals'])" 2>/dev/null || echo MISSING)"
+check "and says the store was written" "yes" \
+    "$(grep -q 'state store: written via' "$WORK/store.out" && echo yes || echo no)"
+
+echo "== exit 4 is passed through, never folded into a generic failure"
+: > "$WS_STUB_LOG"
+WS_STUB_EXIT=4 WORKSPACE_STATE_BIN="$WORK/fake-ws" "$SUT" --root "$WS" --store >"$WORK/store4.out" 2>&1
+check "the script exits 4 when the CLI does" "4" "$?"
+check "it says unreachable, not empty" "yes" \
+    "$(grep -q 'unreachable or unconfigured' "$WORK/store4.out" && echo yes || echo no)"
+check "and says the manifest half still succeeded" "yes" \
+    "$(grep -q 'repos.yaml was still written' "$WORK/store4.out" && echo yes || echo no)"
+WS_STUB_EXIT=1 WORKSPACE_STATE_BIN="$WORK/fake-ws" "$SUT" --root "$WS" --store >"$WORK/store1.out" 2>&1
+check "any other CLI failure exits with that code" "1" "$?"
+check "and is reported as a failed write, not as unreachable" "yes" \
+    "$(grep -q 'write failed' "$WORK/store1.out" && echo yes || echo no)"
+
+echo "== without --store the CLI is never invoked"
+: > "$WS_STUB_LOG"
+WORKSPACE_STATE_BIN="$WORK/fake-ws" "$SUT" --root "$WS" >"$WORK/nostore.out" 2>&1
+check "a plain write exits 0" "0" "$?"
+check "the CLI was not called" "0" "$(wc -l < "$WS_STUB_LOG" | tr -d ' ')"
+check "and the note names the flag that would have written it" "yes" \
+    "$(grep -q 'state store: not written (pass --store)' "$WORK/nostore.out" && echo yes || echo no)"
 
 echo
 echo "protections-selftest: $PASS passed, $FAIL failed"

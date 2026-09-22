@@ -562,9 +562,11 @@ reading the live GitHub API, and gates on drift from what is recorded.
 
 ```bash
 scripts/protections.sh                    # fetch, then write the generated block
+scripts/protections.sh --store            # ...and the workspace-state store
 scripts/protections.sh --check            # compare recorded against live; non-zero on drift
 scripts/protections.sh --dry-run          # print the diff a write would make
 scripts/protections.sh --emit-json facts.json
+scripts/protections.sh --emit-json - | workspace-state protections set --file -
 scripts/protections.sh --root ~/code/other-workspace
 ```
 
@@ -602,10 +604,26 @@ generated block becoming the next stale artifact, and it is the same shape as
 
 Requires `gh`, authenticated, and PyYAML.
 
-**The state-store write is not wired up.** The script is specified to write
-these facts to a state store as well as to `repos.yaml`; that store does not
-exist yet, so nothing here writes to it. `--emit-json` produces exactly the
-payload it will consume, and the seam is marked at the end of the script.
+**The state store.** `--store` writes the same facts to the `workspace-state`
+store as well as to `repos.yaml`, through that CLI. It is off by default,
+because this script has to keep working on a machine that cannot reach the
+store; and it is a write, so it refuses `--check` and `--dry-run`.
+
+The CLI is resolved from `$WORKSPACE_STATE_BIN`, then `PATH`, and resolved
+*before* any fetching, so a missing CLI costs nothing rather than being
+discovered after twenty API calls. There is deliberately no fallback to a
+dotfiles install path — this repo is public and does not get to know where
+your binaries live.
+
+**Exit 4 is passed straight through.** `workspace-state` uses 4 for "the
+backend is unreachable or unconfigured", and it is never an empty result, so
+a caller can tell a store that said nothing from no store at all. `repos.yaml`
+is written before the store is touched, so a 4 means the manifest half
+succeeded. That distinction is the whole point of the epic, and folding it
+into a generic failure would throw it away.
+
+`--emit-json -` writes the payload to stdout, which moves the per-repo table
+to stderr so it cannot corrupt it. That is what makes the pipeline form work.
 
 ## release MCP server
 
