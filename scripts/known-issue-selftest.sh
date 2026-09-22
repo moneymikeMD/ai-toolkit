@@ -7,17 +7,13 @@
 # Defaults to the sibling scripts/known-issue.sh. Pass an older revision's
 # path to reproduce the RED failures below against pre-fix code.
 #
-# `migrate` is NOT covered here, and this is a gap rather than a decision.
-# known-issue.sh ships the subcommand; its heading-detection was tested only
-# by homelab's separate 337-line selftest, retired under LAB-228. Nothing in
-# this file exercises it.
-#
-# Whoever rebuilds that coverage: assert the exact `entries written: N` count,
-# not a zero exit. Per LAB-123 the failure printed "Migration OK" alongside a
-# plausible, silently-wrong count, because the two scanners cross-checking
-# each other shared one blind spot. Agreement between them was not
-# independence, and an exit code could not see the difference. Only the
-# number could.
+# `migrate` IS covered, as of NWM-157: six fixtures ported from homelab's
+# retired 337-line selftest plus a seventh, at the end of this file. Each
+# asserts the exact `entries written: N`, never a zero exit — per LAB-123 the
+# failure printed "Migration OK" alongside a plausible, silently-wrong count,
+# because the two scanners cross-checking each other shared one blind spot.
+# Agreement between them was not independence, and an exit code could not see
+# the difference. Only the number could. Keep that shape for anything added.
 
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -535,6 +531,244 @@ elif cmp -s "$MR/docs/known-issues.md" "$WORK/index-current.md"; then
     bad "test25: remanifest regenerated the index — accepting a hash and reindexing must stay separate"
 else
     ok "test25: remanifest reports a stale index and leaves it for reindex"
+fi
+
+# NWM-157. Six fixtures ported from homelab's retired selftest, read at
+# 9c8d5e0^, plus a seventh added for a reason the porting exposed.
+
+# Every case asserts the exact `entries written: N`, never a zero exit
+# (LAB-123): the defect printed "Migration OK" beside a plausible,
+# silently-wrong count, so only the number can tell correct from confident.
+MIG_SNAPSHOT_BEFORE=$(git -C "$HERE/.." status --porcelain 2>/dev/null || true)
+
+# count_entries REPO — entry files on disk, 0 when the directory is absent.
+# Not a bare find: under `set -o pipefail` a missing directory makes the whole
+# assignment fail, which `set -e` then turns into a silent early exit.
+count_entries() {
+    [ -d "$1/docs/known-issues" ] || { echo 0; return 0; }
+    find "$1/docs/known-issues" -name '*.md' | wc -l | tr -d ' '
+}
+
+# run_migrate_case NAME FIXTURE WANT — migrate must exit 0, report exactly
+# WANT entries, put exactly WANT files on disk, and leave lint green.
+run_migrate_case() {
+    local name="$1" fixture="$2" want="$3" repo out rc got disk
+    repo=$(fresh_repo "mig-$name")
+    mkdir -p "$repo/docs"
+    cp "$fixture" "$repo/docs/known-issues.md"
+    set +e
+    out=$( (cd "$repo" && ./scripts/known-issue.sh migrate) 2>&1 )
+    rc=$?
+    set -e
+    if [ "$rc" -ne 0 ]; then
+        bad "migrate/$name: exited $rc, wanted 0
+$(printf '%s\n' "$out" | sed 's/^/       /')"
+        return
+    fi
+    got=$(printf '%s\n' "$out" | sed -n 's/^  entries written: \([0-9]*\)$/\1/p')
+    disk=$(count_entries "$repo")
+    if [ "${got:-<none>}" != "$want" ]; then
+        bad "migrate/$name: entries written was '${got:-<none>}', wanted $want"
+    elif [ "$disk" != "$want" ]; then
+        bad "migrate/$name: $disk entry files on disk, wanted $want"
+    else
+        set +e
+        (cd "$repo" && ./scripts/known-issue.sh lint) >"$WORK/mig-$name-lint.out" 2>&1
+        rc=$?
+        set -e
+        if [ "$rc" -ne 0 ]; then
+            bad "migrate/$name: lint is red on what migrate just wrote:
+$(sed 's/^/       /' "$WORK/mig-$name-lint.out")"
+        else
+            ok "migrate/$name: exactly $want entries written, on disk, and lint green"
+        fi
+    fi
+}
+
+# run_migrate_refuse_case NAME FIXTURE SUBSTRING — malformed input must be
+# refused loudly, naming the real cause, with nothing written. Collapsing
+# silently to a smaller count is the failure this class exists to stop, so the
+# SUBSTRING matters: a refusal for some other reason is not this refusal.
+run_migrate_refuse_case() {
+    local name="$1" fixture="$2" want="$3" repo out rc disk
+    repo=$(fresh_repo "mig-$name")
+    mkdir -p "$repo/docs"
+    cp "$fixture" "$repo/docs/known-issues.md"
+    set +e
+    out=$( (cd "$repo" && ./scripts/known-issue.sh migrate) 2>&1 )
+    rc=$?
+    set -e
+    disk=$(count_entries "$repo")
+    if [ "$rc" -eq 0 ]; then
+        bad "migrate/$name: exited 0 on malformed input, wanted a refusal
+$(printf '%s\n' "$out" | sed 's/^/       /')"
+    elif ! printf '%s\n' "$out" | grep -q -- "$want"; then
+        bad "migrate/$name: refused, but not for the '$want' reason:
+$(printf '%s\n' "$out" | sed 's/^/       /')"
+    elif [ "$disk" != "0" ]; then
+        bad "migrate/$name: refused but wrote $disk entry file(s) anyway"
+    else
+        ok "migrate/$name: refuses naming '$want', and writes nothing"
+    fi
+}
+
+FIX="$WORK/fixtures"
+mkdir -p "$FIX"
+
+# 1. A 4-space-indented '```' — CommonMark's INDENTED CODE BLOCK, inert
+# literal text, never a delimiter. Pre-fix this was read as a real, never
+# closed fence opener and swallowed headings two and three: "entries
+# written: 1".
+cat > "$FIX/indented-fence.md" <<'EOF'
+# Known issues
+
+| Severity | Finding |
+| --- | --- |
+
+## Real heading one — HIGH
+Some text.
+
+    ``` example of an indented code block that starts with backticks
+
+## Real heading two — MEDIUM
+Body of heading two.
+
+## Real heading three — LOW
+Body of heading three.
+EOF
+run_migrate_case "indented-fence" "$FIX/indented-fence.md" 3
+
+# 2. Genuine 0-indent ``` and ~~~ fences, each hiding a '## ' line that must
+# NOT count. Guards a fix to case 1 that overcorrects into ignoring fences.
+cat > "$FIX/real-fence.md" <<'EOF'
+# Known issues
+
+| Severity | Finding |
+| --- | --- |
+
+## Real heading one — HIGH
+Some text.
+
+```
+## this looks like a heading but is code
+```
+
+## Real heading two — MEDIUM
+Body of heading two.
+
+~~~
+## also fake, inside a tilde fence
+~~~
+
+## Real heading three — LOW
+Body of heading three.
+EOF
+run_migrate_case "real-fence" "$FIX/real-fence.md" 3
+
+# 3. A fence opened at 3 spaces and "closed" at 4 — one column past the bound,
+# so it never closes. Every scanner agrees that line is not a closer, which is
+# why a disagreement-based cross-check cannot catch this; it needs the
+# orthogonal invariant instead. Pre-fix: "Migration OK", 1 entry, exit 0.
+cat > "$FIX/bad-close-indent.md" <<'EOF'
+# Known issues
+
+| Severity | Finding |
+| --- | --- |
+
+## Real heading one — HIGH
+Some text.
+
+   ```
+   code inside 3-space fence
+    ```
+
+## Real heading two — MEDIUM
+Body.
+
+## Real heading three — LOW
+Body.
+EOF
+run_migrate_refuse_case "bad-close-indent" "$FIX/bad-close-indent.md" "unclosed"
+
+cat > "$FIX/tilde-info-string.md" <<'EOF'
+## Real heading one — HIGH
+Body.
+
+~~~python
+## fake heading inside tilde fence with info string
+~~~
+
+## Real heading two — MEDIUM
+Body.
+EOF
+run_migrate_case "tilde-info-string" "$FIX/tilde-info-string.md" 2
+
+cat > "$FIX/heading-after-closer.md" <<'EOF'
+## Real heading one — HIGH
+Body.
+
+```
+code
+```
+## Real heading two — MEDIUM
+Body.
+EOF
+run_migrate_case "heading-after-closer" "$FIX/heading-after-closer.md" 2
+
+# 6. A tab-indented fence, balanced. Ported verbatim, but be honest about what
+# it is: no mutation of the scanner changes its answer, because the block holds
+# no heading, so opener and closer move together. It proves migrate parses this
+# shape; it is NOT coverage of the tab rule. Case 7 is.
+# shellcheck disable=SC2016 # literal backticks in a single-quoted format
+printf '## Real heading one — HIGH\nBody.\n\n\t```\n\tcode\n\t```\n\n## Real heading two — MEDIUM\nBody.\n' \
+    > "$FIX/tab-indented-opener.md"
+run_migrate_case "tab-indented-opener" "$FIX/tab-indented-opener.md" 2
+
+# 7. NOT ported — added because case 6 cannot fail. A tab is 4 columns, so a
+# tab-indented '```' is an indented code block, not an opener. Unbalanced, that
+# rule decides the outcome: honour it and there is no fence, so 2 entries;
+# break it and the fence never closes, so migrate refuses.
+# shellcheck disable=SC2016 # literal backticks in a single-quoted format
+printf '## Real heading one — HIGH\nBody.\n\n\t```\n\n## Real heading two — MEDIUM\nBody.\n' \
+    > "$FIX/tab-opener-unclosed.md"
+run_migrate_case "tab-opener-unclosed" "$FIX/tab-opener-unclosed.md" 2
+
+# Every case above only asserts lint exits 0, which a lint returning 0
+# unconditionally would satisfy. This drifts the index and requires a refusal.
+MIG_REPO=$(fresh_repo mig-lint-drift)
+mkdir -p "$MIG_REPO/docs"
+cp "$FIX/heading-after-closer.md" "$MIG_REPO/docs/known-issues.md"
+set +e
+(cd "$MIG_REPO" && ./scripts/known-issue.sh migrate) >"$WORK/mig-drift-setup.out" 2>&1
+RC=$?
+(cd "$MIG_REPO" && ./scripts/known-issue.sh lint) >"$WORK/mig-drift-before.out" 2>&1
+RC_BEFORE=$?
+set -e
+printf '\n| LAB-000 | a row no entry file backs |\n' >> "$MIG_REPO/docs/known-issues.md"
+set +e
+(cd "$MIG_REPO" && ./scripts/known-issue.sh lint) >"$WORK/mig-drift-after.out" 2>&1
+RC_AFTER=$?
+set -e
+if [ "$RC" -ne 0 ] || [ "$RC_BEFORE" -ne 0 ]; then
+    bad "migrate/lint-drift: the positive control failed (migrate=$RC lint=$RC_BEFORE)"
+elif [ "$RC_AFTER" -eq 0 ]; then
+    bad "migrate/lint-drift: lint exited 0 on an index drifted from the entries"
+elif ! grep -q "LINT FAILED" "$WORK/mig-drift-after.out"; then
+    bad "migrate/lint-drift: lint refused but did not say the index is wrong:
+$(cat "$WORK/mig-drift-after.out")"
+else
+    ok "migrate/lint-drift: lint is green after migrate and red once the index drifts"
+fi
+
+# migrate is one-shot and destructive, and this script's repo has no corpus of
+# its own to lose — but a cwd slip is exactly NWM-145's hazard, so compare
+# rather than assume.
+MIG_SNAPSHOT_AFTER=$(git -C "$HERE/.." status --porcelain 2>/dev/null || true)
+if [ "${MIG_SNAPSHOT_BEFORE:-<clean>}" = "${MIG_SNAPSHOT_AFTER:-<clean>}" ]; then
+    ok "migrate never touched the repo this selftest lives in"
+else
+    bad "migrate changed the repo this selftest lives in:
+$(printf '%s\n' "$MIG_SNAPSHOT_AFTER" | sed 's/^/       /')"
 fi
 
 echo
