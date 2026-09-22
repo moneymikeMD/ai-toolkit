@@ -23,7 +23,7 @@ inert until a tag moves, and both are wrong for half the repo.
 | Surface | What | Consumed as | Propagation |
 | --- | --- | --- | --- |
 | **CI** | `actions/` (4) + their reusable workflow wrappers | `uses: moneymikeMD/ai-toolkit/actions/<name>@v1` | Pinned to the floating major. Landing on `main` changes nothing until `v1` moves. |
-| **Operator scripts** | `scripts/` (8), each with its own `<name>-selftest.sh`, over `scripts/lib/kit.sh` | Invoked by **absolute path** out of the caller's working checkout | None. Not pinned, not versioned, not released — a save to disk is live to every caller immediately. |
+| **Operator scripts** | `scripts/` (11), each with its own `<name>-selftest.sh`, over `scripts/lib/kit.sh` and `scripts/lib/ghkit.sh` | Invoked by **absolute path** out of the caller's working checkout | None. Not pinned, not versioned, not released — a save to disk is live to every caller immediately. |
 
 Verified live: `git ls-remote origin refs/tags/v1` and `git rev-parse
 v1.6.0`/`main` all resolve to `641f38b`, and `git ls-tree v1 actions/` lists
@@ -129,13 +129,17 @@ repo is public. **Exit 4 is passed through**, because that CLI uses 4 for
 "unreachable or unconfigured" and never for an empty result; `repos.yaml` is
 written first, so a 4 means only the store half failed.
 
-**The five scripts assigned here are settled, as of 2026-09-22.**
-`known-issue.sh` arrived under NWM-128; `script-analytics.py` and
-`script-retire.sh` arrived together under NWM-130. `claude-cost.py` is
-**closed and is not coming** — NWM-129, owner decision: a script invoked by a
-hook inside a shipped plugin is machine-applied, not repo-consumed, so it
-stays on the plugin side of the boundary rule. `land-branch.sh` is NWM-131, a
-wrapper split rather than a move, and is still open.
+**Four scripts were assigned here, and three have arrived.** `known-issue.sh`
+under NWM-128 (Completed), `script-analytics.py` and `script-retire.sh`
+together under NWM-130 (Completed). Only `land-branch.sh` is outstanding, as
+NWM-131 — and that is a *wrapper split*, not a move: the generic core comes
+here and the ticket lifecycle stays in night-watchman.
+
+**`claude-cost.py` was never a fifth assignment, and counting it as one is a
+mistake this file made for a day.** NWM-129 is Completed *as satisfied in
+place*: a script invoked by a hook inside a shipped plugin is machine-applied,
+not repo-consumed, so it stays on the plugin side of the boundary rule. It is
+not a pending arrival, and nothing here is waiting for it.
 
 ### `script-analytics.py` and `script-retire.sh`, and two things to know
 
@@ -155,6 +159,29 @@ find it raises an error naming every path it tried plus `--prices` and
 `$CLAUDE_PRICES_TSV`. The price table is the consumer's data, not this tool's.
 The selftest pins its own copy under `scripts/fixtures/` so a price edit
 anywhere cannot redden it.
+
+**Two of those five candidates never fire outside a hook.**
+`$CLAUDE_PROJECT_DIR` is populated for Claude Code *hooks* only — measured
+2026-09-22, it is unset in the Bash tool environment, so an agent or a human
+at a shell falls straight past both `$CLAUDE_PROJECT_DIR` candidates to the
+error. The 2026-09-22 measurement above that showed night-watchman's own table
+winning was taken with the variable set by hand; it is a true statement about
+resolution order and a misleading one about ordinary use. **In practice
+`--prices` or `$CLAUDE_PRICES_TSV` is required outside a hook**, and any
+future change leaning on `$CLAUDE_PROJECT_DIR` needs that escape kept.
+
+**And one consumer's price table is not a table at all.** homelab's
+`scripts/dev/script-analytics.py` loads `scripts/dev/claude-cost.py` at
+runtime via `importlib.util.spec_from_file_location` and reuses its `usd_cost`
+and price-table helpers; homelab has **no `templates/` directory and no
+`claude-prices.tsv` anywhere**. NWM-129 kept `claude-cost.py` there on
+purpose, so for that consumer this copy does not relocate the price source —
+it *removes* it, and every resolution candidate above misses. homelab has
+correctly not retired its copy. That is the mirror image of the shadowing
+problem: a table here outranks a consumer's own, and a consumer may not have a
+table to outrank. The options are on LAB-228 comment 10956 and the choice is
+the owner's; what belongs here is that **the swap is not drop-in for homelab,
+and assuming it is would break that repo's cost reporting silently.**
 
 **`script-retire.sh --yes` requires a `land-branch.sh` that is not here.** It
 resolves `${LAND_BRANCH_SH:-$HERE/land-branch.sh}`, and the existence check
@@ -256,11 +283,13 @@ night-watchman fixed it by routing them through a
 naming what to set, on the same shape as its existing `work-order-root.sh`.
 
 **So before accepting any further script here, grep the donor for
-`${CLAUDE_PLUGIN_ROOT}/scripts/<name>` as well as its CI.** This is the same
-defect that blocks NWM-129 — a `plugin.json` SessionEnd hook hardcoding
-`$PLUGIN_ROOT/scripts/claude-cost*.py` — so it is a recurring shape, not one
-ticket's accident. `land-branch.sh` (NWM-131) already has two such references,
-at `session-start/SKILL.md:155` and `:339`.
+`${CLAUDE_PLUGIN_ROOT}/scripts/<name>` as well as its CI.** The same shape
+decided NWM-129: a `plugin.json` SessionEnd hook hardcodes
+`$PLUGIN_ROOT/scripts/claude-cost*.py`, and rather than reroute it, the owner
+closed that ticket as satisfied in place. So this is a recurring shape, not
+one ticket's accident — and note it can be a *reason to leave a script where
+it is* as readily as a thing to fix on the way in. `land-branch.sh` (NWM-131)
+already has two such references, at `session-start/SKILL.md:155` and `:339`.
 
 **Running the check is mandatory; rerouting is not.** NWM-131 is a *wrapper
 split* — the generic merge-and-push core comes here, the ticket lifecycle
@@ -329,9 +358,12 @@ not this repo, so it references the action by full `@v1` ref instead of a
 local path. Full option lists are in each `action.yml` and in `README.md`;
 don't re-derive them here.
 
-NWM-128 wants a `known-issue` action published here and is still blocked on
-it — `actions/` has grown from one to four since that ticket was filed, but a
-known-issue check isn't among them yet. Separately, work-order's
+NWM-128's text asked for a `known-issue` action to be published here. That
+ticket is **Completed** — `known-issue.sh` landed in `f81cd50` — and no such
+action exists, deliberately; the reasoning is under "No `known-issue`
+composite action is published" above. `actions/` has grown from one to four
+since that ticket was filed, and nothing is waiting on a fifth. Separately,
+work-order's
 `conformance/README.md` names `ai-toolkit/scripts/verify-run.sh --against` as
 supplying the half of its `[MUST-9]` check the validator can't do itself —
 that division of labor is recorded only in prose in another repo; nothing
