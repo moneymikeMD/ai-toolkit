@@ -336,6 +336,21 @@ YES_TARGET_REAL="$(cd "$YES_TARGET" && pwd -P)"
 assert_contains "--root --yes: land-branch.sh was handed off from the target" \
     "$(sed "s|cwd=|cwd=|" "$LAND_ROOT_LOG" 2>/dev/null || echo none)" "cwd=$YES_TARGET_REAL"
 
+# A set-but-EMPTY SCRIPTS_MD is a caller bug, not an absent override: a
+# harness writing SCRIPTS_MD="$SOME_UNSET_VAR" produces exactly that, and
+# ${VAR:-} cannot tell the two apart. Matches --root's handling two lines up.
+if (cd "$ROOT_BYSTANDER" && SCRIPT_ANALYTICS_PY="$SCRIPT_ANALYTICS" SCRIPTS_MD="" \
+    "$RETIRE_SH" --events "$ROOT_EVENTS" --until 2026-08-20 --dry-run \
+    --root "$ROOT_TARGET") >/dev/null 2>&1; then
+    fail "SCRIPTS_MD: an empty value should have been refused"
+else
+    pass "SCRIPTS_MD: an empty value is refused, not treated as unset"
+fi
+assert_contains "SCRIPTS_MD: the empty case names the variable" \
+    "$( (cd "$ROOT_BYSTANDER" && SCRIPT_ANALYTICS_PY="$SCRIPT_ANALYTICS" SCRIPTS_MD="" \
+        "$RETIRE_SH" --events "$ROOT_EVENTS" --until 2026-08-20 --dry-run \
+        --root "$ROOT_TARGET") 2>&1 || true )" "SCRIPTS_MD is set but empty"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

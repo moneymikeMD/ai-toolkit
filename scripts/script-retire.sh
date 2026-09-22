@@ -87,7 +87,11 @@ if [ "$HAVE_ROOT" -eq 1 ]; then
 else
     REPO_ROOT="$(pwd)"
 fi
-SCRIPTS_MD="${SCRIPTS_MD:-$REPO_ROOT/docs/scripts.md}"
+if [ -n "${SCRIPTS_MD+set}" ]; then
+    [ -n "$SCRIPTS_MD" ] || die "SCRIPTS_MD is set but empty"
+else
+    SCRIPTS_MD="$REPO_ROOT/docs/scripts.md"
+fi
 
 [ -n "$EVENTS" ] || die "--events FILE is required"
 [ -f "$EVENTS" ] || die "events file not found: $EVENTS"
