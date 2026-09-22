@@ -15,6 +15,13 @@ FAIL=0
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# A fixture path that silently becomes relative resolves INSIDE the repo
+# under development, and `git -C` on a non-repo subdirectory of it walks UP
+# to that repo. Two commits reached this repo's main that way while this file
+# was being written, and one junk path reached the public remote.
+SUT_REPO_HEAD="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo none)"
+SUT_REPO_DIRT="$(git -C "$HERE" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+
 ok()   { PASS=$((PASS + 1)); echo "ok - $1"; }
 nope() { FAIL=$((FAIL + 1)); echo "FAIL - $1"; [ $# -gt 1 ] && printf '%s\n' "$2" | sed 's/^/      /'; }
 
@@ -43,6 +50,7 @@ newrepo() {
     local remote=1 d
     [ "${1:-}" = "--no-remote" ] && remote=0
     d=$(mktemp -d "$WORK/repoXXXXXX")
+    case "$d" in "$WORK"/*) ;; *) echo "FATAL: mktemp gave [$d]" >&2; exit 2 ;; esac
     {
         git init -q -b main "$d/repo"
         git -C "$d/repo" config user.email "selftest@example.invalid"
@@ -65,6 +73,25 @@ newrepo() {
     printf '%s' "$d"
 }
 
+# fixture_git DIR ARGS... — `git -C DIR`, refusing any DIR that is not an
+# absolute path under $WORK holding its own .git. Every git call against a
+# fixture goes through this, so the class above fails loudly instead.
+fixture_git() {
+    local d="$1"
+    shift
+    case "$d" in
+        "$WORK"/*) ;;
+        *) echo "FATAL: fixture path is not under \$WORK: [$d]" >&2; exit 2 ;;
+    esac
+    # -e, not -d: a linked worktree's .git is a file. The second clause is
+    # the bare case, which has neither.
+    if [ ! -e "$d/.git" ] && { [ ! -f "$d/HEAD" ] || [ ! -d "$d/objects" ]; }; then
+        echo "FATAL: not a fixture repo, bare or otherwise: [$d]" >&2
+        exit 2
+    fi
+    git -C "$d" "$@"
+}
+
 RC=0
 OUT=""
 # run ARGS... — invoke the script from $WORK, which is not a git repository,
@@ -72,8 +99,11 @@ OUT=""
 run() { OUT=$(cd "$WORK" && "$SUT" "$@" 2>&1); RC=$?; }
 run_in() { local d="$1"; shift; OUT=$(cd "$d" && "$SUT" "$@" 2>&1); RC=$?; }
 
-origin_main() { git -C "$1/origin.git" rev-parse main 2>/dev/null || echo NONE; }
-repo_main()   { git -C "$1/repo" rev-parse main 2>/dev/null || echo NONE; }
+origin_main() {
+    [ -d "$1/origin.git" ] || { echo NONE; return 0; }
+    fixture_git "$1/origin.git" rev-parse main 2>/dev/null || echo NONE
+}
+repo_main()   { fixture_git "$1/repo" rev-parse main 2>/dev/null || echo NONE; }
 
 # hookfile PATH BODY — write an executable hook and echo its path.
 hookfile() {
@@ -130,11 +160,11 @@ run --repo "$D/repo" --branch feature --label TKT-1
 check "a clean landing exits 0" 0 "$RC"
 AFTER_ORIGIN=$(origin_main "$D")
 [ "$AFTER_ORIGIN" != "$BEFORE_MAIN" ] && ok "origin/main advanced" || nope "origin/main advanced" "still $AFTER_ORIGIN"
-check "the pushed commit is a merge (two parents)" 2 "$(git -C "$D/origin.git" rev-list --parents -n1 main | wc -w | tr -d ' ' | awk '{print $1-1}')"
-contains "the merge subject carries --label" "TKT-1: merge branch 'feature' into main" "$(git -C "$D/origin.git" log -1 --format=%s main)"
-check "the landed work is in the pushed tree" "work" "$(git -C "$D/origin.git" show main:work.txt)"
+check "the pushed commit is a merge (two parents)" 2 "$(fixture_git "$D/origin.git" rev-list --parents -n1 main | wc -w | tr -d ' ' | awk '{print $1-1}')"
+contains "the merge subject carries --label" "TKT-1: merge branch 'feature' into main" "$(fixture_git "$D/origin.git" log -1 --format=%s main)"
+check "the landed work is in the pushed tree" "work" "$(fixture_git "$D/origin.git" show main:work.txt)"
 check "the main worktree is NOT fast-forwarded" "$BEFORE_MAIN" "$(repo_main "$D")"
-git -C "$D/repo" rev-parse --verify --quiet refs/heads/feature >/dev/null \
+fixture_git "$D/repo" rev-parse --verify --quiet refs/heads/feature >/dev/null \
     && nope "the landed branch is deleted" "refs/heads/feature still exists" \
     || ok "the landed branch is deleted"
 [ -d "$D/repo-land" ] && ok "the integration worktree is created beside the repo" || nope "the integration worktree is created beside the repo" "no $D/repo-land"
@@ -142,7 +172,7 @@ git -C "$D/repo" rev-parse --verify --quiet refs/heads/feature >/dev/null \
 D=$(newrepo)
 run --repo "$D/repo" --branch feature --merge-message "wholly custom subject"
 check "--merge-message lands" 0 "$RC"
-check "--merge-message replaces the whole subject" "wholly custom subject" "$(git -C "$D/origin.git" log -1 --format=%s main)"
+check "--merge-message replaces the whole subject" "wholly custom subject" "$(fixture_git "$D/origin.git" log -1 --format=%s main)"
 
 D=$(newrepo --no-remote)
 run --repo "$D/repo" --branch feature
@@ -157,7 +187,7 @@ BEFORE=$(origin_main "$D")
 run --repo "$D/repo" --branch feature --lint-cmd "false"
 check "a failing --lint-cmd exits 1" 1 "$RC"
 check "a failing lint pushes nothing" "$BEFORE" "$(origin_main "$D")"
-check "a failing lint reverts the merge" "$BEFORE" "$(git -C "$D/repo-land" rev-parse HEAD)"
+check "a failing lint reverts the merge" "$BEFORE" "$(fixture_git "$D/repo-land" rev-parse HEAD)"
 
 # The word-splitting fix. Running $LINT_CMD unquoted passes the operator to
 # the first word as an argument, so `false || true` fails a lint that should
@@ -174,13 +204,13 @@ check "--lint-cmd '&&' is evaluated, so a red lint still fails" 1 "$RC"
 check "a word-split lint cannot push a red tree" "$BEFORE" "$(origin_main "$D")"
 
 D=$(newrepo)
-git -C "$D/repo" checkout -q feature 2>/dev/null
+fixture_git "$D/repo" checkout -q feature 2>/dev/null
 mkdir -p "$D/repo/scripts"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$D/repo/scripts/lint.sh"
 chmod +x "$D/repo/scripts/lint.sh"
-git -C "$D/repo" add -A >/dev/null 2>&1
-git -C "$D/repo" commit -qm "add a failing lint" >/dev/null 2>&1
-git -C "$D/repo" checkout -q main
+fixture_git "$D/repo" add -A >/dev/null 2>&1
+fixture_git "$D/repo" commit -qm "add a failing lint" >/dev/null 2>&1
+fixture_git "$D/repo" checkout -q main
 BEFORE=$(origin_main "$D")
 run --repo "$D/repo" --branch feature
 check "./scripts/lint.sh in the MERGED tree is the default gate" 1 "$RC"
@@ -227,8 +257,8 @@ run --repo "$D/repo" --branch feature --hook "$H"
 check "a pre-merge refusal exits 2" 2 "$RC"
 contains "a pre-merge refusal reports the hook's exit code" "exit 3" "$OUT"
 check "a pre-merge refusal pushes nothing" "$BEFORE" "$(origin_main "$D")"
-check "a pre-merge refusal undoes the hook's own commit" "$BEFORE" "$(git -C "$D/repo-land" rev-parse HEAD)"
-git -C "$D/repo" rev-parse --verify --quiet refs/heads/feature >/dev/null \
+check "a pre-merge refusal undoes the hook's own commit" "$BEFORE" "$(fixture_git "$D/repo-land" rev-parse HEAD)"
+fixture_git "$D/repo" rev-parse --verify --quiet refs/heads/feature >/dev/null \
     && ok "a pre-merge refusal leaves the branch in place" \
     || nope "a pre-merge refusal leaves the branch in place" "feature was deleted"
 
@@ -238,7 +268,7 @@ H=$(hookfile "$WORK/h-postmerge-fail.sh" '[ "$1" = post-merge ] && exit 4; exit 
 run --repo "$D/repo" --branch feature --hook "$H"
 check "a post-merge failure exits 1" 1 "$RC"
 check "a post-merge failure pushes nothing" "$BEFORE" "$(origin_main "$D")"
-check "a post-merge failure reverts the merge" "$BEFORE" "$(git -C "$D/repo-land" rev-parse HEAD)"
+check "a post-merge failure reverts the merge" "$BEFORE" "$(fixture_git "$D/repo-land" rev-parse HEAD)"
 
 D=$(newrepo)
 BEFORE=$(origin_main "$D")
@@ -246,7 +276,7 @@ H=$(hookfile "$WORK/h-prepush-fail.sh" '[ "$1" = pre-push ] && exit 5; exit 0')
 run --repo "$D/repo" --branch feature --hook "$H"
 check "a pre-push failure exits 1" 1 "$RC"
 check "a pre-push failure pushes nothing" "$BEFORE" "$(origin_main "$D")"
-check "a pre-push failure reverts the merge" "$BEFORE" "$(git -C "$D/repo-land" rev-parse HEAD)"
+check "a pre-push failure reverts the merge" "$BEFORE" "$(fixture_git "$D/repo-land" rev-parse HEAD)"
 
 # The point the decision entry called the hard one: a pre-push hook's commit
 # has to be inside the history the push carries.
@@ -259,14 +289,14 @@ H=$(hookfile "$WORK/h-prepush-commit.sh" \
     'exit 0')
 run --repo "$D/repo" --branch feature --hook "$H"
 check "a pre-push hook commit lands" 0 "$RC"
-check "a pre-push hook commit is INSIDE the pushed history" "done" "$(git -C "$D/origin.git" show main:completion.txt 2>&1)"
-check "the pushed tip is the hook's commit, not the merge" "completion commit" "$(git -C "$D/origin.git" log -1 --format=%s main)"
+check "a pre-push hook commit is INSIDE the pushed history" "done" "$(fixture_git "$D/origin.git" show main:completion.txt 2>&1)"
+check "the pushed tip is the hook's commit, not the merge" "completion commit" "$(fixture_git "$D/origin.git" log -1 --format=%s main)"
 
 D=$(newrepo)
 H=$(hookfile "$WORK/h-postpush-fail.sh" '[ "$1" = post-push ] && exit 6; exit 0')
 run --repo "$D/repo" --branch feature --hook "$H"
 check "a post-push failure exits 1" 1 "$RC"
-check "a post-push failure does NOT revert the landing" "work" "$(git -C "$D/origin.git" show main:work.txt 2>&1)"
+check "a post-push failure does NOT revert the landing" "work" "$(fixture_git "$D/origin.git" show main:work.txt 2>&1)"
 contains "a post-push failure says the landing stands" "the landing stands and was NOT reverted" "$OUT"
 
 echo
@@ -287,7 +317,7 @@ echo
 echo "== integration worktree and lock =="
 
 D=$(newrepo)
-git -C "$D/repo" worktree add -q --detach "$D/repo-land" main >/dev/null 2>&1
+fixture_git "$D/repo" worktree add -q --detach "$D/repo-land" main >/dev/null 2>&1
 echo dirt > "$D/repo-land/dirt.txt"
 run --repo "$D/repo" --branch feature
 check "a dirty integration worktree is refused" 2 "$RC"
@@ -309,7 +339,7 @@ run --repo "$D/repo" --branch feature
 check "a lock held by a dead pid is reclaimed" 0 "$RC"
 
 D=$(newrepo)
-git -C "$D/repo" worktree add -q "$D/feature-wt" feature >/dev/null 2>&1
+fixture_git "$D/repo" worktree add -q "$D/feature-wt" feature >/dev/null 2>&1
 echo uncommitted > "$D/feature-wt/scratch.txt"
 run --repo "$D/repo" --branch feature
 check "a dirty worktree holding the branch is refused" 2 "$RC"
@@ -325,6 +355,14 @@ lacks "the core names no multiplexer" "herdr" "$SRC"
 lacks "the core carries no attribution trailer" "Co-Authored-By" "$SRC"
 lacks "the core carries no session trailer" "Claude-Session" "$SRC"
 contains "the core resolves its library from BASH_SOURCE, not \$0" 'dirname "${BASH_SOURCE[0]}"' "$SRC"
+
+echo
+echo "== the repo under test =="
+
+check "no fixture committed to the repo under test" \
+    "$SUT_REPO_HEAD" "$(git -C "$HERE" rev-parse HEAD 2>/dev/null || echo none)"
+check "no fixture left files in the repo under test" \
+    "$SUT_REPO_DIRT" "$(git -C "$HERE" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
 
 echo
 echo "$((PASS + FAIL)) assertion(s), $PASS passed, $FAIL failed"
