@@ -149,6 +149,20 @@ repo is public. **Exit 4 is passed through**, because that CLI uses 4 for
 "unreachable or unconfigured" and never for an empty result; `repos.yaml` is
 written first, so a 4 means only the store half failed.
 
+**It reads two top-level keys, and `workspace.sh` reads one** (LAB-307,
+2026-09-22). `adjacent_repos:` holds repos whose landing policy matters but
+which are not subdirectories of the workspace — the container repo the
+manifest lives in, a dotfiles checkout elsewhere on disk. `protections.sh`
+measures them exactly as members: same generated block, same `--store` rows,
+same `--check` drift gate, and an `adjacent` flag in the emitted JSON. The key
+is optional and a name under both keys is an error. `workspace.sh` must never
+see them, or `clone` would try to put `home_workspace` inside
+`home_workspace/home_workspace`; it needed no change, because it reads
+`repos:` by name, and `workspace-selftest.sh` is what holds that — its fixture
+adjacent entries have a real remote and a real directory precisely so a leak
+into `clone`, `pull`, `foreach` or `gen-settings` has something to act on and
+goes red instead of passing vacuously.
+
 **Four scripts were assigned here, and all four have arrived.**
 `known-issue.sh` under NWM-128 (Completed), `script-analytics.py` and
 `script-retire.sh` together under NWM-130 (Completed), and `land-core.sh`
