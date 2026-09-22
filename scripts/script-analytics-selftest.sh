@@ -1051,8 +1051,9 @@ fi
 # field=="status", proving that filter is load-bearing. Expected, by hand, with
 # --until pinned to 2026-09-15 so both stay deterministic: To Do 1414.968s
 # closed (created 11:45:11.813Z) / Completed 42673.219s open (12:08:46.781Z).
-# Recorded API text, so it travels with this selftest rather than living in
-# whichever repo happens to own the Jira provider.
+
+# Recorded API text, so it travels with this selftest rather than with
+# whichever repo owns the Jira provider.
 FIXTURES_DIR="$HERE/fixtures"
 [ -d "$FIXTURES_DIR" ] || FIXTURES_DIR="$HERE/../providers/tracker/jira/fixtures"
 CHANGELOG_FIXTURE="$FIXTURES_DIR/raw.changelog.PROJ-63.txt"
@@ -1219,8 +1220,9 @@ fi
 # NW_DRY_RUN=1 must reach the REAL jira-api.sh as --dry-run: no credential
 # resolved, the request printed to stderr, exit 0. A throwaway $NW_JIRA_HOST
 # means no config file or real credential is needed.
+
 # Skipped loudly, never silently: these two assert the CONSUMING repo's
-# provider behaviour, and this repo deliberately has no Jira provider. Point
+# provider behaviour, and this repo has none. Point
 # $SCRIPT_ANALYTICS_JIRA_API at one to get them back.
 if [ ! -f "$JIRA_API_REAL" ]; then
   echo "skip - status-durations: NW_DRY_RUN=1 against a real jira-api.sh (none at $JIRA_API_REAL; set \$SCRIPT_ANALYTICS_JIRA_API)"
