@@ -121,8 +121,13 @@ approving reviews, code-owner review — into `repos.yaml` as generated keys,
 and `--check` as the drift gate), arrived 2026-09-22 under LAB-292. It records
 a private repo on GitHub Free as `unavailable` rather than as no-protections,
 because the rulesets API answers 403 there and the two are different facts.
-Its state-store write is a marked seam, not an implementation: LAB-291's CLI
-does not exist yet, so only the `repos.yaml` half is live.
+Its state-store half went live 2026-09-22 once LAB-291's CLI existed:
+`--store` writes the same facts through `workspace-state`, off by default and
+refusing `--check`/`--dry-run`. The CLI is resolved from
+`$WORKSPACE_STATE_BIN` then `PATH` and nowhere else — no dotfiles path, this
+repo is public. **Exit 4 is passed through**, because that CLI uses 4 for
+"unreachable or unconfigured" and never for an empty result; `repos.yaml` is
+written first, so a 4 means only the store half failed.
 
 **The five scripts assigned here are settled, as of 2026-09-22.**
 `known-issue.sh` arrived under NWM-128; `script-analytics.py` and

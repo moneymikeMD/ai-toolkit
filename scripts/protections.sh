@@ -39,17 +39,28 @@
 #   --check           compare recorded against live, write nothing, and exit
 #                      non-zero naming every repo that differs
 #   --dry-run         print the diff a write would make, and write nothing
-#   --emit-json PATH  write the collected facts as JSON
+#   --store           also write the facts to the workspace-state store, via
+#                      the workspace-state CLI. A write, so it cannot be
+#                      combined with --check or --dry-run.
+#   --emit-json PATH  write the collected facts as JSON. `-` means stdout,
+#                      which moves the per-repo table to stderr so it cannot
+#                      corrupt the payload.
 #   --root PATH       the workspace directory. Default: the nearest ancestor
 #                      of the current directory holding a repos.yaml.
 #
-# Exit codes: 0 all good; 1 drift under --check, or a fetch failed; 2 usage.
+# Exit codes: 0 all good; 1 drift under --check, or a fetch failed; 2 usage;
+# 4 --store reached the CLI and the store was unreachable or unconfigured.
+# 4 is passed straight through from workspace-state, where it never means an
+# empty result, so a caller can tell a store that said nothing from no store
+# at all. repos.yaml is written before the store is touched, so a 4 means the
+# manifest half succeeded.
 #
-# NOT WIRED UP: the state store. LAB-292 specifies that this script writes
-# these facts to LAB-291's state-store CLI as well as to repos.yaml. That CLI
-# does not exist yet, so nothing here writes to it. --emit-json produces
-# exactly the payload it will take, so wiring it up is a call site rather than
-# a rewrite. See the LAB-291 seam at the end of this file.
+# The store write is the second half of LAB-292 and needs LAB-291's CLI. It is
+# resolved from $WORKSPACE_STATE_BIN, then PATH, and resolved BEFORE any
+# fetching so a missing CLI costs nothing. There is deliberately no fallback
+# to a dotfiles install path: this repo is public and does not get to know
+# where one operator keeps their binaries. Off by default, because the script
+# has to keep working on a machine that cannot reach the store at all.
 
 set -eu
 
@@ -62,6 +73,7 @@ die_usage() { echo "protections.sh: $1" >&2; exit 2; }
 ROOT=""
 MODE="write"
 EMIT_JSON=""
+STORE=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -71,12 +83,17 @@ while [ $# -gt 0 ]; do
             ROOT="$2"; shift 2 ;;
         --check)   MODE="check";   shift ;;
         --dry-run) MODE="dry-run"; shift ;;
+        --store)   STORE=1;        shift ;;
         --emit-json)
             [ $# -ge 2 ] || die_usage "--emit-json needs a PATH"
             EMIT_JSON="$2"; shift 2 ;;
         *) die_usage "unexpected argument '$1' (try --help)" ;;
     esac
 done
+
+if [ "$STORE" -eq 1 ] && [ "$MODE" != "write" ]; then
+    die_usage "--store is a write, so it cannot be combined with --$MODE"
+fi
 
 if [ -z "$ROOT" ]; then
     ROOT=$(pwd)
@@ -91,6 +108,27 @@ MANIFEST="$ROOT/repos.yaml"
 
 need gh python3
 python3 -c 'import yaml' 2>/dev/null || die "PyYAML is required: pip3 install pyyaml"
+
+# Resolved before any fetching, so a missing CLI costs nothing rather than
+# being discovered after twenty API calls. It is not on PATH by default.
+WORKSPACE_STATE=""
+if [ "$STORE" -eq 1 ]; then
+    if [ -n "${WORKSPACE_STATE_BIN+set}" ]; then
+        [ -n "$WORKSPACE_STATE_BIN" ] || die_usage "WORKSPACE_STATE_BIN is set but empty"
+        WORKSPACE_STATE="$WORKSPACE_STATE_BIN"
+    elif command -v workspace-state >/dev/null 2>&1; then
+        WORKSPACE_STATE="$(command -v workspace-state)"
+    else
+        die_usage "--store needs workspace-state: not on PATH and \$WORKSPACE_STATE_BIN is unset. This repo is public and deliberately does not know where your dotfiles install it."
+    fi
+    [ -x "$WORKSPACE_STATE" ] || die_usage "not executable: $WORKSPACE_STATE"
+    # --store always has a payload to hand the CLI, whether or not the caller
+    # asked for one of their own.
+    if [ -z "$EMIT_JSON" ]; then
+        tmpfile EMIT_JSON || die "could not create the payload tempfile"
+    fi
+    [ "$EMIT_JSON" != "-" ] || die_usage "--store needs --emit-json to name a file, not -"
+fi
 
 set +e
 python3 - "$MANIFEST" "$MODE" "$EMIT_JSON" <<'PY'
@@ -195,7 +233,8 @@ def fetch(name, url):
         listed = gh_api("repos/%s/rulesets" % slug) or []
     except Unavailable:
         facts.update(landing=UNAVAILABLE, required_checks=UNAVAILABLE,
-                     code_owner=UNAVAILABLE, rulesets=UNAVAILABLE)
+                     code_owner=UNAVAILABLE, required_approvals=UNAVAILABLE,
+                     rulesets=UNAVAILABLE)
         return facts
 
     contexts, approvals, code_owner_required = [], 0, False
@@ -232,6 +271,7 @@ def fetch(name, url):
         required_checks=contexts or "none",
         code_owner=(codeowners_handle(slug, facts["default_branch"])
                     if code_owner_required else "none"),
+        required_approvals=approvals,
         rulesets=len(listed),
     )
     return facts
@@ -353,7 +393,7 @@ def main():
     for name, entry in entries.items():
         url = entry.get("url")
         if not url:
-            print("skip   %s (no url in the manifest)" % name)
+            print("skip   %s (no url in the manifest)" % name, file=sys.stderr)
             continue
         try:
             collected[name] = fetch(name, url)
@@ -363,21 +403,28 @@ def main():
     for line in failures:
         print("ERROR  %s" % line, file=sys.stderr)
 
+    # With --emit-json - the payload owns stdout, so the human-readable table
+    # moves to stderr rather than corrupting it.
+    report = sys.stderr if EMIT_JSON == "-" else sys.stdout
     for name in sorted(collected):
         facts = collected[name]
         checks = facts["required_checks"]
-        print("%-20s %-11s %-11s checks=%s code_owner=%s" % (
+        print("%-20s %-11s %-11s checks=%s approvals=%s code_owner=%s" % (
             name, facts["visibility"], facts["landing"],
             ",".join(checks) if isinstance(checks, list) else checks,
-            facts["code_owner"]))
+            facts["required_approvals"], facts["code_owner"]), file=report)
 
     if EMIT_JSON:
-        with open(EMIT_JSON, "w") as handle:
-            json.dump({"fetched_at": stamp,
-                       "repos": [collected[n] for n in sorted(collected)]},
-                      handle, indent=2, sort_keys=True)
-            handle.write("\n")
-        print("wrote %s" % EMIT_JSON)
+        payload = {"fetched_at": stamp,
+                   "repos": [collected[n] for n in sorted(collected)]}
+        if EMIT_JSON == "-":
+            json.dump(payload, sys.stdout, indent=2, sort_keys=True)
+            sys.stdout.write("\n")
+        else:
+            with open(EMIT_JSON, "w") as handle:
+                json.dump(payload, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+            print("wrote %s" % EMIT_JSON, file=report)
 
     if failures:
         return 1
@@ -391,13 +438,14 @@ def main():
             for line in drift:
                 print("  %s" % line, file=sys.stderr)
             return 1
-        print("protections --check: %d repos, no drift" % len(collected))
+        print("protections --check: %d repos, no drift" % len(collected),
+              file=report)
         return 0
 
     updated = rewrite(lines, collected, stamp)
     rendered = "\n".join(updated) + "\n"
     if rendered == text:
-        print("repos.yaml unchanged")
+        print("repos.yaml unchanged", file=report)
         return 0
     if MODE == "dry-run":
         sys.stdout.writelines(difflib.unified_diff(
@@ -406,11 +454,11 @@ def main():
         return 0
     with open(MANIFEST, "w") as handle:
         handle.write(rendered)
-    print("wrote %s (%d repos)" % (MANIFEST, len(collected)))
+    print("wrote %s (%d repos)" % (MANIFEST, len(collected)), file=report)
     for name in sorted(collected):
         if entries[name].get("visibility") not in (None, collected[name]["visibility"]):
             print("note   %s: corrected the hand-written visibility key to %s"
-                  % (name, collected[name]["visibility"]))
+                  % (name, collected[name]["visibility"]), file=report)
     return 0
 
 
@@ -423,12 +471,25 @@ PY
 STATUS=$?
 set -e
 
-# LAB-291 seam. The state-store write specified by LAB-292 is not wired up,
-# because LAB-291's CLI does not exist yet. --emit-json already produces the
-# payload it will consume, so the wiring is a call site here and nothing else
-# in this script changes.
-if [ "$MODE" != "check" ] && [ "$STATUS" -eq 0 ]; then
-    echo "state store: not written — LAB-291's CLI does not exist yet (seam in $0)"
+if [ "$STATUS" -ne 0 ] || [ "$MODE" != "write" ]; then
+    exit "$STATUS"
 fi
 
-exit "$STATUS"
+if [ "$STORE" -eq 0 ]; then
+    echo "state store: not written (pass --store)" >&2
+    exit 0
+fi
+
+# Exit 4 is the CLI's "unreachable or unconfigured", and it is never an empty
+# result, so it is passed through rather than folded into a generic failure:
+# a caller has to be able to tell a store that said nothing from no store.
+set +e
+"$WORKSPACE_STATE" protections set --file "$EMIT_JSON"
+STORE_STATUS=$?
+set -e
+case "$STORE_STATUS" in
+    0) echo "state store: written via $WORKSPACE_STATE" >&2 ;;
+    4) echo "state store: unreachable or unconfigured (workspace-state exit 4); repos.yaml was still written" >&2 ;;
+    *) echo "state store: write failed (workspace-state exit $STORE_STATUS); repos.yaml was still written" >&2 ;;
+esac
+exit "$STORE_STATUS"
