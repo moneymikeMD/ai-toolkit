@@ -369,6 +369,174 @@ else
     ok "test15: --root with no PATH dies rather than swallowing the next thing"
 fi
 
+# NWM-154. lint's manifest check stays; what was missing was a supported way
+# back to green once an entry HAS drifted. Without one the only exits are a
+# hand-edit of _manifest.json — the exact edit class the check exists to
+# catch — or re-running a mutating subcommand to fix bookkeeping.
+MR=$(fresh_repo remanifest-repo)
+mr() { (cd "$MR" && ./scripts/known-issue.sh "$@"); }
+mr add --title "First finding" --severity HIGH --body "one" >/dev/null 2>&1
+mr add --title "Second finding" --severity LOW --body "two" >/dev/null 2>&1
+mr add --title "Third finding" --severity MEDIUM --body "three" >/dev/null 2>&1
+MAN="$MR/docs/known-issues/_manifest.json"
+
+printf '\nhand-edited, bypassing add/resolve/severity\n' >> "$MR/docs/known-issues/first-finding.md"
+set +e
+mr lint >"$WORK/t16.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ]; then
+    bad "test16: lint passed an entry that was hand-edited after it was written"
+elif ! grep -q "remanifest first-finding" "$WORK/t16.out"; then
+    bad "test16: lint failed but did not name the repair path, so the failure is still a dead end:
+$(cat "$WORK/t16.out")"
+else
+    ok "test16: a drifted entry fails lint AND the failure names remanifest"
+fi
+
+BEFORE_BODY=$(shasum < "$MR/docs/known-issues/first-finding.md")
+set +e
+mr remanifest first-finding >"$WORK/t17.out" 2>&1
+RC=$?
+mr lint >"$WORK/t17lint.out" 2>&1
+RC_LINT=$?
+set -e
+AFTER_BODY=$(shasum < "$MR/docs/known-issues/first-finding.md")
+if [ "$RC" -ne 0 ]; then
+    bad "test17: remanifest failed ($RC):
+$(cat "$WORK/t17.out")"
+elif [ "$RC_LINT" -ne 0 ]; then
+    bad "test17: lint is still red after remanifest:
+$(cat "$WORK/t17lint.out")"
+elif ! grep -q "^recorded first-finding" "$WORK/t17.out"; then
+    bad "test17: remanifest did not print what it blessed:
+$(cat "$WORK/t17.out")"
+elif [ "$BEFORE_BODY" != "$AFTER_BODY" ]; then
+    bad "test17: remanifest rewrote the entry file — it must touch only the manifest"
+else
+    ok "test17: remanifest re-records a drifted entry, lint goes green, the entry is untouched"
+fi
+
+set +e
+mr remanifest first-finding >"$WORK/t18.out" 2>&1
+set -e
+if ! grep -q "^current  first-finding" "$WORK/t18.out"; then
+    bad "test18: re-recording an already-current slug did not say so:
+$(cat "$WORK/t18.out")"
+elif ! grep -q "no change" "$WORK/t18.out"; then
+    bad "test18: it reported a change where there was none:
+$(cat "$WORK/t18.out")"
+else
+    ok "test18: re-recording an already-current slug is a no-op and says so"
+fi
+
+set +e
+mr remanifest --drop first-finding >"$WORK/t19.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ]; then
+    bad "test19: --drop removed the record of an entry whose file still exists"
+elif ! grep -q "still exists" "$WORK/t19.out"; then
+    bad "test19: it refused, but not for the reason expected:
+$(cat "$WORK/t19.out")"
+elif ! grep -q '"first-finding"' "$MAN"; then
+    bad "test19: it refused but dropped the key anyway"
+else
+    ok "test19: --drop refuses a slug whose file is still there"
+fi
+
+rm "$MR/docs/known-issues/second-finding.md"
+mr reindex >/dev/null 2>&1
+set +e
+mr remanifest second-finding >"$WORK/t20.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ]; then
+    bad "test20: re-recording a slug whose file is gone exited 0"
+elif ! grep -q -- "--drop" "$WORK/t20.out"; then
+    bad "test20: it refused without naming --drop, so the dead end remains:
+$(cat "$WORK/t20.out")"
+else
+    ok "test20: re-recording a slug whose file is gone refuses and names --drop"
+fi
+
+set +e
+mr remanifest --drop second-finding >"$WORK/t21.out" 2>&1
+RC=$?
+mr lint >"$WORK/t21lint.out" 2>&1
+RC_LINT=$?
+set -e
+if [ "$RC" -ne 0 ] || [ "$RC_LINT" -ne 0 ]; then
+    bad "test21: --drop did not take the corpus back to green (drop=$RC lint=$RC_LINT):
+$(cat "$WORK/t21.out")
+$(cat "$WORK/t21lint.out")"
+elif ! grep -q "^dropped  second-finding" "$WORK/t21.out"; then
+    bad "test21: --drop did not print what it removed:
+$(cat "$WORK/t21.out")"
+elif grep -q '"second-finding"' "$MAN"; then
+    bad "test21: --drop reported success but the key is still recorded"
+else
+    ok "test21: --drop removes an orphaned record and lint goes green"
+fi
+
+printf '\nedited again\n' >> "$MR/docs/known-issues/third-finding.md"
+BEFORE_MAN=$(shasum < "$MAN")
+set +e
+mr remanifest third-finding no-such-slug >"$WORK/t22.out" 2>&1
+RC=$?
+set -e
+AFTER_MAN=$(shasum < "$MAN")
+if [ "$RC" -eq 0 ]; then
+    bad "test22: a batch naming an unknown slug exited 0"
+elif [ "$BEFORE_MAN" != "$AFTER_MAN" ]; then
+    bad "test22: a batch with one bad slug still wrote the manifest — it must be all-or-nothing"
+else
+    ok "test22: one bad slug in a batch writes nothing at all"
+fi
+
+set +e
+mr remanifest third-finding third-finding >"$WORK/t23.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ] || ! grep -q "more than once" "$WORK/t23.out"; then
+    bad "test23: a slug named twice was not refused ($RC):
+$(cat "$WORK/t23.out")"
+else
+    ok "test23: a slug named more than once is refused"
+fi
+
+set +e
+mr remanifest >"$WORK/t24.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ]; then
+    bad "test24: remanifest with no slugs exited 0 — a blanket accept is exactly what must not exist"
+elif ! grep -q "there is no --all" "$WORK/t24.out"; then
+    bad "test24: it refused, but not in a way that says why:
+$(cat "$WORK/t24.out")"
+else
+    ok "test24: remanifest with no slugs refuses, and says there is no --all"
+fi
+
+# Accepting a hash and regenerating the index are separate acts. severity
+# rewrites the entry and the index together, so reverting the index by hand
+# leaves the manifest current and the index stale — the state that proves
+# remanifest reports staleness rather than quietly fixing it.
+mr severity third-finding COSMETIC >/dev/null 2>&1
+cp "$MR/docs/known-issues.md" "$WORK/index-current.md"
+printf '| LOW | stale row that reindex would not produce |\n' >> "$MR/docs/known-issues.md"
+set +e
+mr remanifest third-finding >"$WORK/t25.out" 2>&1
+set -e
+if ! grep -q "not what \`reindex\` would produce" "$WORK/t25.out"; then
+    bad "test25: remanifest did not report the stale index:
+$(cat "$WORK/t25.out")"
+elif cmp -s "$MR/docs/known-issues.md" "$WORK/index-current.md"; then
+    bad "test25: remanifest regenerated the index — accepting a hash and reindexing must stay separate"
+else
+    ok "test25: remanifest reports a stale index and leaves it for reindex"
+fi
+
 echo
 echo "$PASS passed, $FAIL failed (against: $KNOWN_ISSUE)"
 [ "$FAIL" -eq 0 ]

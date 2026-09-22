@@ -99,7 +99,22 @@ every repo a `repos.yaml` manifest names, invoked by path rather than by
 
 `known-issue.sh` (manage a repo's `docs/known-issues/` entries and the
 generated `docs/known-issues.md` index; `lint` is the drift gate a consumer
-runs in CI), arrived 2026-09-21 under NWM-128.
+runs in CI), arrived 2026-09-21 under NWM-128. It gained `remanifest` under
+NWM-154 (2026-09-22): `lint` fails any entry whose sha256 no longer matches
+`_manifest.json`, and until then there was **no supported way back to green**
+once one had drifted — a consumer adopting this onto a corpus with history hit
+it on day one. `remanifest <slug>...` re-records the named hashes and
+`remanifest --drop <slug>...` removes the record of a file that is gone; both
+print what they did, refuse the other's case, and write nothing unless every
+named slug is valid. There is deliberately no `--all`, because acceptance has
+to be an act rather than a rubber stamp, and the manifest failures in `lint`
+now name the repair path instead of being a dead end.
+
+Worth knowing what the absence cost: homelab's corpus was red with exactly
+this — 11 stale hashes and 1 orphaned key — and it went green in commit
+`9c8d5e0`, whose subject is about taking this script from ai-toolkit, by
+**hand-editing `_manifest.json`**. That is precisely the edit class the check
+exists to catch, done because nothing else was available.
 
 `protections.sh` (mirror every repo's live landing rules — required checks,
 approving reviews, code-owner review — into `repos.yaml` as generated keys,
