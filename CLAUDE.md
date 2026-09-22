@@ -23,7 +23,7 @@ inert until a tag moves, and both are wrong for half the repo.
 | Surface | What | Consumed as | Propagation |
 | --- | --- | --- | --- |
 | **CI** | `actions/` (4) + their reusable workflow wrappers | `uses: moneymikeMD/ai-toolkit/actions/<name>@v1` | Pinned to the floating major. Landing on `main` changes nothing until `v1` moves. |
-| **Operator scripts** | `scripts/` (11), each with its own `<name>-selftest.sh`, over `scripts/lib/kit.sh` and `scripts/lib/ghkit.sh` | Invoked by **absolute path** out of the caller's working checkout | None. Not pinned, not versioned, not released — a save to disk is live to every caller immediately. |
+| **Operator scripts** | `scripts/` (12), each with its own `<name>-selftest.sh`, over `scripts/lib/kit.sh` and `scripts/lib/ghkit.sh` | Invoked by **absolute path** out of the caller's working checkout | None. Not pinned, not versioned, not released — a save to disk is live to every caller immediately. |
 
 Verified live: `git ls-remote origin refs/tags/v1` and `git rev-parse
 v1.6.0`/`main` all resolve to `641f38b`, and `git ls-tree v1 actions/` lists
@@ -116,6 +116,26 @@ this — 11 stale hashes and 1 orphaned key — and it went green in commit
 **hand-editing `_manifest.json`**. That is precisely the edit class the check
 exists to catch, done because nothing else was available.
 
+`land-core.sh` (merge a local branch onto a target branch and push it,
+through a `<repo>-land` integration worktree, behind a four-point hook
+contract), arrived 2026-09-22 under NWM-131. Three things about it are not
+obvious from the name. It is **not** an alternative to `pr-land.sh`: that one
+merges a pull request through the GitHub API behind its required checks, this
+one merges a local branch with git. Its `--repo` is **mandatory with no cwd
+fallback**, unlike `known-issue.sh --root` and `script-retire.sh --root`,
+because this path merges, pushes and deletes a branch and a silent wrong-repo
+default is unrecoverable rather than merely wrong. And `--dry-run` calls no
+hook at all, so a consumer prints its own plan around this one.
+
+Two behaviours deliberately diverge from night-watchman's `land-branch.sh`,
+so the two files are not byte-comparable on these lines. `--lint-cmd` goes
+through `bash -c` rather than being word-split — the word-split form *passes*
+`true && false`, so a red lint lands, which is the direction that matters and
+is why the known issue did not travel. And the core carries no
+`Co-Authored-By` / `Claude-Session` trailer support at all: NWM-131 asked for
+those env vars to be dropped before the move rather than after, and a public
+tool must not offer them.
+
 `protections.sh` (mirror every repo's live landing rules — required checks,
 approving reviews, code-owner review — into `repos.yaml` as generated keys,
 and `--check` as the drift gate), arrived 2026-09-22 under LAB-292. It records
@@ -129,11 +149,13 @@ repo is public. **Exit 4 is passed through**, because that CLI uses 4 for
 "unreachable or unconfigured" and never for an empty result; `repos.yaml` is
 written first, so a 4 means only the store half failed.
 
-**Four scripts were assigned here, and three have arrived.** `known-issue.sh`
-under NWM-128 (Completed), `script-analytics.py` and `script-retire.sh`
-together under NWM-130 (Completed). Only `land-branch.sh` is outstanding, as
-NWM-131 — and that is a *wrapper split*, not a move: the generic core comes
-here and the ticket lifecycle stays in night-watchman.
+**Four scripts were assigned here, and all four have arrived.**
+`known-issue.sh` under NWM-128 (Completed), `script-analytics.py` and
+`script-retire.sh` together under NWM-130 (Completed), and `land-core.sh`
+under NWM-131 (2026-09-22) — which was a *wrapper split*, not a move: the
+generic merge-and-push core is here, the ticket lifecycle stays in
+night-watchman as a wrapper that calls it. night-watchman keeps its
+`scripts/land-branch.sh`; nothing was deleted there by this side.
 
 **`claude-cost.py` was never a fifth assignment, and counting it as one is a
 mistake this file made for a day.** NWM-129 is Completed *as satisfied in
@@ -303,14 +325,16 @@ decided NWM-129: a `plugin.json` SessionEnd hook hardcodes
 closed that ticket as satisfied in place. So this is a recurring shape, not
 one ticket's accident — and note it can be a *reason to leave a script where
 it is* as readily as a thing to fix on the way in. `land-branch.sh` (NWM-131)
-already has two such references, at `session-start/SKILL.md:155` and `:339`.
+has two such references, at `session-start/SKILL.md:155` and `:340` —
+re-measured 2026-09-22 against night-watchman at `a944bfd`; `:339` was this
+file's earlier reading and the line has moved since.
 
-**Running the check is mandatory; rerouting is not.** NWM-131 is a *wrapper
-split* — the generic merge-and-push core comes here, the ticket lifecycle
-stays in night-watchman as a wrapper — so those two paths may correctly keep
-pointing at the retained wrapper and need no change at all. Decide it
-deliberately rather than discover it; the check tells you which, and only a
-whole-file move forces a reroute.
+**Running the check is mandatory; rerouting is not.** NWM-131 was a *wrapper
+split* — the generic merge-and-push core came here as `land-core.sh`, the
+ticket lifecycle stays in night-watchman as a wrapper — so those two paths
+correctly keep pointing at the retained wrapper and were not changed. That
+was the outcome of running the check, not of skipping it: only a whole-file
+move forces a reroute.
 
 **State the adopter cost out loud when you do reroute.** A resolver shim means
 an adopting repo now needs a checkout or an env var where the script used to
