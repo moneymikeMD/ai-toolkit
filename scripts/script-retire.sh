@@ -16,6 +16,12 @@
 # Usage:
 #   script-retire.sh --events FILE [--since ISO] [--until ISO] [--dry-run]
 #   script-retire.sh --events FILE --yes --ticket NWM-nnn
+#   ... [--root PATH]   the repo to retire FROM. Without it, the caller's
+#                       cwd. This path git rm's, commits and lands, so a
+#                       drifted cwd deletes files in the wrong repo — pass
+#                       --root from anything not already standing in the
+#                       target (LAB-300). Empty, missing or non-git is an
+#                       error, never a fall back to cwd.
 #
 # --dry-run (default): print the retirement plan for every "retire?" row,
 #   exit 0 whether or not any candidates were found.
@@ -40,13 +46,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 case "${1:-}" in -h|--help) show_help ;; esac
 
-# The repo to retire FROM is the caller's cwd, not where this script lives —
-# a selftest fixture repo invokes it by path from outside itself.
-REPO_ROOT="$(pwd)"
-
 PYTHON="${PYTHON:-python3}"
 SCRIPT_ANALYTICS="${SCRIPT_ANALYTICS_PY:-$HERE/script-analytics.py}"
-SCRIPTS_MD="${SCRIPTS_MD:-$REPO_ROOT/docs/scripts.md}"
 LAND_BRANCH="${LAND_BRANCH_SH:-$HERE/land-branch.sh}"
 
 EVENTS=""
@@ -54,6 +55,8 @@ SINCE=""
 UNTIL=""
 DRY_RUN=1
 TICKET=""
+HAVE_ROOT=0
+ROOT_ARG=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -63,10 +66,28 @@ while [ $# -gt 0 ]; do
         --dry-run) DRY_RUN=1; shift ;;
         --yes) DRY_RUN=0; shift ;;
         --ticket) [ $# -ge 2 ] || die "--ticket needs an id"; TICKET="$2"; shift 2 ;;
+        --root) [ $# -ge 2 ] || die "--root needs a PATH"; ROOT_ARG="$2"; HAVE_ROOT=1; shift 2 ;;
+        --root=*) ROOT_ARG="${1#--root=}"; HAVE_ROOT=1; shift ;;
         -h|--help) show_help ;;
         *) die "unknown argument: $1 (--help for usage)" ;;
     esac
 done
+
+# Defaults to cwd, not to where this script lives: a fixture repo invokes it
+# by path from outside itself. --root takes that decision away from cwd, which
+# matters more here than in known-issue.sh (NWM-145) because this path git
+# rm's, commits and lands (LAB-300).
+if [ "$HAVE_ROOT" -eq 1 ]; then
+    # HAVE_ROOT, not [ -n "$ROOT_ARG" ]: a set-but-EMPTY --root is a caller
+    # bug and must fail rather than silently fall back to cwd.
+    [ -n "$ROOT_ARG" ] || die "--root: PATH is empty"
+    [ -d "$ROOT_ARG" ] || die "--root: no such directory: $ROOT_ARG"
+    REPO_ROOT="$(git -C "$ROOT_ARG" rev-parse --show-toplevel 2>/dev/null)" \
+        || die "--root: not a git repository: $ROOT_ARG"
+else
+    REPO_ROOT="$(pwd)"
+fi
+SCRIPTS_MD="${SCRIPTS_MD:-$REPO_ROOT/docs/scripts.md}"
 
 [ -n "$EVENTS" ] || die "--events FILE is required"
 [ -f "$EVENTS" ] || die "events file not found: $EVENTS"
