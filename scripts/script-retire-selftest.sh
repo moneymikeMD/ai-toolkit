@@ -28,7 +28,10 @@
 # scratch dir; a real `git` repo is `init`'d there with a pinned
 # hooksPath/signing config, local to the fixture only.
 #
-# Usage: ./scripts/script-retire-selftest.sh
+# Usage: ./scripts/script-retire-selftest.sh [path-to-script-retire.sh]
+# Pass an older revision's path to reproduce the RED failures against
+# pre-fix code. Capture that copy BEFORE the fix commits — a `git show
+# HEAD:...` recovered afterwards is no longer the before-state.
 # Exit 0 if every real assertion passes, 1 otherwise.
 
 set -euo pipefail
@@ -38,7 +41,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 
 case "${1:-}" in -h|--help) show_help ;; esac
 
-RETIRE_SH="$HERE/script-retire.sh"
+RETIRE_SH="${1:-$HERE/script-retire.sh}"
 SCRIPT_ANALYTICS="$HERE/script-analytics.py"
 [ -f "$RETIRE_SH" ] || die "cannot find script-retire.sh at $RETIRE_SH"
 [ -f "$SCRIPT_ANALYTICS" ] || die "cannot find script-analytics.py at $SCRIPT_ANALYTICS"
@@ -238,6 +241,100 @@ else
     fail "--yes without --ticket should have refused"
 fi
 
+
+# --- LAB-300: --root, because this path git rm's, commits and lands. -------
+# The discriminating shape: invoke from a directory that is NOT the target and
+# assert the plan names the TARGET's files. Run from inside the repo it proves
+# nothing, because cwd would have been right by accident.
+ROOT_TARGET="$(build_fixture "$ROOT/root-target")"
+ROOT_BYSTANDER="$(build_fixture "$ROOT/root-bystander")"
+ROOT_EVENTS="$ROOT/root-events.jsonl"
+write_events "$ROOT_EVENTS"
+
+retire_from_bystander() {
+    (cd "$ROOT_BYSTANDER" && SCRIPT_ANALYTICS_PY="$SCRIPT_ANALYTICS" \
+        "$RETIRE_SH" --events "$ROOT_EVENTS" --until 2026-08-20 --dry-run "$@" 2>&1)
+}
+
+ROOT_OUT="$(retire_from_bystander --root "$ROOT_TARGET" || true)"
+assert_contains "--root: the plan scanned the target repo" \
+    "$ROOT_OUT" "$ROOT_TARGET/agents/nobody-cares.md"
+assert_not_contains "--root: and never the cwd repo of the same shape" \
+    "$ROOT_OUT" "$ROOT_BYSTANDER/agents/nobody-cares.md"
+assert_not_contains "--root: the cwd repo is left clean" \
+    "$(git -C "$ROOT_BYSTANDER" status --porcelain)" "scripts/"
+
+ROOT_OUT="$(retire_from_bystander "--root=$ROOT_TARGET" || true)"
+assert_contains "--root=PATH names the same repo as --root PATH" \
+    "$ROOT_OUT" "$ROOT_TARGET/agents/nobody-cares.md"
+
+mkdir -p "$ROOT_TARGET/docs/deep"
+ROOT_OUT="$(retire_from_bystander --root "$ROOT_TARGET/docs/deep" || true)"
+assert_contains "--root at a subdirectory resolves to that repo's toplevel" \
+    "$ROOT_OUT" "$ROOT_TARGET/agents/nobody-cares.md"
+
+# Without the flag the target is still cwd, which is the plugin/fixture case
+# and is deliberately unchanged — it is also the hazard the flag exists for.
+ROOT_OUT="$(retire_from_bystander || true)"
+assert_contains "without --root the target is still cwd, unchanged" \
+    "$ROOT_OUT" "$ROOT_BYSTANDER/agents/nobody-cares.md"
+
+# A set-but-EMPTY --root must not fall back to cwd: that is the exact target
+# this flag exists to take away from cwd (the LAB-228 shape).
+if retire_from_bystander --root "" >/dev/null 2>&1; then
+    fail "--root: an empty PATH should have been refused"
+else
+    pass "--root: an empty PATH is refused, not a fall back to cwd"
+fi
+assert_contains "--root: an empty PATH says so" \
+    "$(retire_from_bystander --root "" || true)" "--root: PATH is empty"
+
+if retire_from_bystander --root "$ROOT/no-such-dir" >/dev/null 2>&1; then
+    fail "--root: a missing directory should have been refused"
+else
+    pass "--root: a missing directory is refused"
+fi
+
+mkdir -p "$ROOT/root-notgit"
+assert_contains "--root: a non-git directory is refused, naming it" \
+    "$(retire_from_bystander --root "$ROOT/root-notgit" || true)" \
+    "not a git repository: $ROOT/root-notgit"
+
+if retire_from_bystander --root >/dev/null 2>&1; then
+    fail "--root with no PATH should have been refused"
+else
+    pass "--root with no PATH is refused, not swallowing the next argument"
+fi
+
+# THE DESTRUCTIVE HALF. A dry run only prints; this is the path that git rm's,
+# commits and lands, and it is the one LAB-300 is actually about.
+YES_TARGET="$(build_fixture "$ROOT/root-yes-target")"
+YES_BYSTANDER="$(build_fixture "$ROOT/root-yes-bystander")"
+LAND_ROOT_LOG="$ROOT/land-branch-root.log"
+LAND_ROOT_STUB="$ROOT/land-branch-stub-root.sh"
+cat > "$LAND_ROOT_STUB" <<EOS
+#!/bin/bash
+echo "\$1 \$2 cwd=\$(pwd)" >> "$LAND_ROOT_LOG"
+exit 0
+EOS
+chmod +x "$LAND_ROOT_STUB"
+
+(cd "$YES_BYSTANDER" && SCRIPT_ANALYTICS_PY="$SCRIPT_ANALYTICS" \
+    SCRIPTS_MD="$YES_TARGET/docs/scripts.md" LAND_BRANCH_SH="$LAND_ROOT_STUB" \
+    "$RETIRE_SH" --events "$ROOT_EVENTS" --until 2026-08-20 --yes \
+    --ticket NWM-300 --root "$YES_TARGET") >/dev/null 2>&1 || true
+
+assert_not_contains "--root --yes: the TARGET's script is gone from its working tree" \
+    "$( [ -f "$YES_TARGET/scripts/oneoff-widget.sh" ] && echo present || echo missing )" "present"
+assert_contains "--root --yes: the BYSTANDER's identically-named script survives" \
+    "$( [ -f "$YES_BYSTANDER/scripts/oneoff-widget.sh" ] && echo present || echo missing )" "present"
+assert_not_contains "--root --yes: the bystander repo has no new commit" \
+    "$(git -C "$YES_BYSTANDER" log --oneline)" "retire"
+assert_contains "--root --yes: the target repo is the one that got the branch" \
+    "$(git -C "$YES_TARGET" branch --show-current)" "retire-oneoff-widget"
+YES_TARGET_REAL="$(cd "$YES_TARGET" && pwd -P)"
+assert_contains "--root --yes: land-branch.sh was handed off from the target" \
+    "$(sed "s|cwd=|cwd=|" "$LAND_ROOT_LOG" 2>/dev/null || echo none)" "cwd=$YES_TARGET_REAL"
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

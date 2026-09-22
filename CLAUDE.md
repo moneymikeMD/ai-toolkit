@@ -183,6 +183,20 @@ table to outrank. The options are on LAB-228 comment 10956 and the choice is
 the owner's; what belongs here is that **the swap is not drop-in for homelab,
 and assuming it is would break that repo's cost reporting silently.**
 
+**`script-retire.sh` takes `--root PATH` (LAB-300, 2026-09-22).** Without it
+the repo it retires from is the caller's cwd — deliberate, because a fixture
+repo invokes it by path from outside itself. But this path `git rm`s, commits
+and hands off to `land-branch.sh`, so a drifted cwd deletes files in whichever
+repo it is standing in. That is NWM-145's hazard on a destructive path, and it
+got sharper when homelab retired its own copy: the documented form used to be
+`./scripts/dev/script-retire.sh`, whose leading `./` implied a cwd inside the
+target. An absolute path into ai-toolkit implies nothing. Empty, missing or
+non-git `--root` is an error, never a fall back to cwd.
+
+Found and measured by the homelab session, which handed it over rather than
+reaching across into this repo — the right call, and the reason the fix is
+here rather than worked around there.
+
 **`script-retire.sh --yes` requires a `land-branch.sh` that is not here.** It
 resolves `${LAND_BRANCH_SH:-$HERE/land-branch.sh}`, and the existence check
 sits inside the `--yes` branch only. So report mode works fine with no
