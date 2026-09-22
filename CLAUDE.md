@@ -101,6 +101,14 @@ every repo a `repos.yaml` manifest names, invoked by path rather than by
 generated `docs/known-issues.md` index; `lint` is the drift gate a consumer
 runs in CI), arrived 2026-09-21 under NWM-128.
 
+`protections.sh` (mirror every repo's live landing rules — required checks,
+approving reviews, code-owner review — into `repos.yaml` as generated keys,
+and `--check` as the drift gate), arrived 2026-09-22 under LAB-292. It records
+a private repo on GitHub Free as `unavailable` rather than as no-protections,
+because the rulesets API answers 403 there and the two are different facts.
+Its state-store write is a marked seam, not an implementation: LAB-291's CLI
+does not exist yet, so only the `repos.yaml` half is live.
+
 **`scripts/` is not yet the complete set it is meant to be.** Of the five
 assigned here, `known-issue.sh` has arrived; `script-analytics.py`,
 `script-retire.sh` (NWM-130), `claude-cost.py` (NWM-129) and `land-branch.sh`
