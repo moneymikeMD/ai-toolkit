@@ -555,6 +555,58 @@ preserved.
 Requires PyYAML (`pip3 install pyyaml`, or `apt install python3-yaml`). The
 script fails with that message rather than misparsing.
 
+## protections
+
+Records how a landing actually works in every repo a `repos.yaml` names, by
+reading the live GitHub API, and gates on drift from what is recorded.
+
+```bash
+scripts/protections.sh                    # fetch, then write the generated block
+scripts/protections.sh --check            # compare recorded against live; non-zero on drift
+scripts/protections.sh --dry-run          # print the diff a write would make
+scripts/protections.sh --emit-json facts.json
+scripts/protections.sh --root ~/code/other-workspace
+```
+
+Four generated keys go into each repo's entry, under a comment naming this
+script, and nothing hand-written is touched:
+
+| key | values |
+| --- | --- |
+| `landing` | `direct`, `checks`, `review`, `unavailable` |
+| `required_checks` | a list of contexts, `none`, or `unavailable` |
+| `code_owner` | a handle, `none`, or `unavailable` |
+| `protections_fetched_at` | UTC, when the three above were measured |
+
+`visibility` is fetched too, but the manifest already carries a hand-written
+`visibility` key, so it is checked rather than duplicated: a write run corrects
+it in place and says so, and `--check` reports a difference like any other
+drift.
+
+**`unavailable` is not a synonym for "no protections".** A private repo on
+GitHub Free cannot have rulesets at all, and the API answers `403 Upgrade to
+GitHub Pro` rather than an empty list. The two mean different things to a
+future reader, and one of them is a plan-upgrade decision, so all three
+generated values carry `unavailable` — `none` in any of them would read as
+measured-and-empty. Any other API failure is an error, never `unavailable`.
+
+**A ruleset counts only when it can actually fire.** It must be `active`, it
+must target a branch, and its `conditions.ref_name` must match the default
+branch. A ruleset aimed at a branch name that does not exist protects nothing
+and has already shipped in this ecosystem once, so the match is evaluated
+rather than assumed.
+
+`--check` is the point of the script, not a nicety: it is what stops the
+generated block becoming the next stale artifact, and it is the same shape as
+`known-issue.sh lint`. Run it from CI or a cron.
+
+Requires `gh`, authenticated, and PyYAML.
+
+**The state-store write is not wired up.** The script is specified to write
+these facts to a state store as well as to `repos.yaml`; that store does not
+exist yet, so nothing here writes to it. `--emit-json` produces exactly the
+payload it will consume, and the seam is marked at the end of the script.
+
 ## release MCP server
 
 `.mcp.json` in this repo registers a stdio MCP server (`release`, sourced
