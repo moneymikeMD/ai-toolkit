@@ -189,6 +189,15 @@ come though nothing here calls it yet, because it is generic and pairs with
 `tmpfile`. Add to it on that rule; do not add a helper a consuming repo should
 own.
 
+**There is a second library now: `scripts/lib/ghkit.sh`** (NWM-162,
+2026-09-22). It holds the GitHub reads more than one script must agree about,
+and it is separate from `kit.sh` for kit.sh's own stated reason — kit.sh may
+not name a specific tool, and `gh` is one. It currently holds
+`gh_required_contexts`, which returns **three** outcomes: read (possibly
+empty), not-visible (403/404), failed. `pr-land.sh` and `land-queue.sh` both
+call it; before that they read the same fact two ways, and the wrong one was
+in the script that lands a queue unattended.
+
 Two consequences to keep in mind. `scripts/*.sh` does **not** glob
 `scripts/lib/*.sh`, so the `shellcheck` job names both — a new lib file is
 covered only because that glob is there. And `show_help` (prints the caller's

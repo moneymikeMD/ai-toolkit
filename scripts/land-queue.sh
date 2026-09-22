@@ -55,6 +55,8 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/ghkit.sh
+. "$SCRIPT_DIR/lib/ghkit.sh"
 PR_LAND="$SCRIPT_DIR/pr-land.sh"
 
 usage() {
@@ -396,7 +398,30 @@ for pr in "${PR_LIST[@]}"; do
         else
             echo "land-queue.sh: PR $pr head $new_head is not the head this repo+PR last confirmed (was $last_seen_head) — its check landscape may not be visible yet; waiting for required checks"
         fi
-        if ! pr_wait_checks "$pr" "$REPO" "$WAIT_CHECKS_S"; then
+
+        # There is nothing to wait for when the base names no required
+        # context, and `gh pr checks --required` exits non-zero in that case
+        # with "no required checks reported", which this script used to read
+        # as a failure (NWM-162).
+        required_contexts=""
+        gh_required_contexts "$REPO" "$base" required_contexts
+        contexts_rc=$?
+        skip_wait=0
+        case "$contexts_rc" in
+            0)  if [ -z "$required_contexts" ]; then
+                    echo "land-queue.sh: $REPO@$base requires no checks — nothing to wait for"
+                    skip_wait=1
+                fi ;;
+            3)  echo "land-queue.sh: branch rules for $REPO@$base are unreadable (403/404) — no required contexts to wait for, not a refusal"
+                skip_wait=1 ;;
+            *)  echo "land-queue.sh: refusing PR $pr — could not read branch rules for $REPO@$base" >&2
+                printf '%s\n' "$required_contexts" >&2
+                any_refused=1
+                [ "$STOP_ON_REFUSAL" -eq 1 ] && break
+                continue ;;
+        esac
+
+        if [ "$skip_wait" -eq 0 ] && ! pr_wait_checks "$pr" "$REPO" "$WAIT_CHECKS_S"; then
             echo "land-queue.sh: refusing PR $pr — required checks did not all pass" >&2
             any_refused=1
             [ "$STOP_ON_REFUSAL" -eq 1 ] && break

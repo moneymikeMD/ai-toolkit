@@ -9,7 +9,7 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SUT="$HERE/land-queue.sh"
+SUT="${1:-$HERE/land-queue.sh}"
 PASS=0
 FAIL=0
 
@@ -94,7 +94,12 @@ if [ "$1" = "api" ]; then
         esac
     done
     case "$endpoint" in
-        rules) printf '%s\n' "$PRLAND_STUB_REQUIRED"; exit 0 ;;
+        rules)
+            if [ -n "${PRLAND_STUB_RULES_ERR:-}" ]; then
+                printf '%s\n' "$PRLAND_STUB_RULES_ERR" >&2
+                exit "${PRLAND_STUB_RULES_EXIT:-1}"
+            fi
+            printf '%s\n' "$PRLAND_STUB_REQUIRED"; exit 0 ;;
         checkruns) printf '%s\n' "$PRLAND_STUB_CHECKRUNS"; exit 0 ;;
     esac
     echo "fake gh: unhandled api call: $*" >&2
@@ -146,6 +151,8 @@ reset_scenario() {
     PRLAND_STUB_MERGE_STATE="CLEAN"
     PRLAND_STUB_REVIEW=""
     PRLAND_STUB_REQUIRED=""
+    PRLAND_STUB_RULES_ERR=""
+    PRLAND_STUB_RULES_EXIT="1"
     PRLAND_STUB_CHECKRUNS=""
     PRLAND_STUB_MERGE_EXIT="0"
     PRLAND_STUB_FINAL_STATE="MERGED"
@@ -156,7 +163,8 @@ reset_scenario() {
         PRLAND_STUB_MERGE_LOG \
         PRLAND_STUB_BASE PRLAND_STUB_SHA PRLAND_STUB_IS_BOT PRLAND_STUB_LOGIN \
         PRLAND_STUB_PR_STATE PRLAND_STUB_MERGE_STATE PRLAND_STUB_REVIEW \
-        PRLAND_STUB_REQUIRED PRLAND_STUB_CHECKRUNS PRLAND_STUB_MERGE_EXIT \
+        PRLAND_STUB_REQUIRED PRLAND_STUB_RULES_ERR PRLAND_STUB_RULES_EXIT \
+        PRLAND_STUB_CHECKRUNS PRLAND_STUB_MERGE_EXIT \
         PRLAND_STUB_FINAL_STATE
 }
 
@@ -197,8 +205,9 @@ check "the refreshed PR still reaches the merge gate exactly once" 1 "$(calls "$
 # --- G2, freshness: pending required checks after an update block the merge. ---
 reset_scenario
 set_reads $'OPEN\tBEHIND\tsha1\tmain\t0' $'OPEN\tCLEAN\tsha2\tmain\t0'
+PRLAND_STUB_REQUIRED="ci"
 LANDQ_STUB_CHECKS_EXIT="1"
-export LANDQ_STUB_CHECKS_EXIT
+export PRLAND_STUB_REQUIRED LANDQ_STUB_CHECKS_EXIT
 rc="$(run_sut "$SUT" 42 --repo test-owner/test-repo --state-dir "$WORK/state")"
 check "a run refused on pending checks exits non-zero" 1 "$rc"
 check "a merge is never attempted while required checks are pending" 0 "$(calls "$PRLAND_STUB_MERGE_LOG")"
@@ -231,6 +240,9 @@ check "  ...and never calls update-branch on it" 0 "$(calls "$LANDQ_STUB_UPDATE_
 # --- WO-045 gap 3: an unconcluded check is waited for, head SHA or not. ---
 reset_scenario
 set_reads $'OPEN\tCLEAN\tsha1\tmain\t2' $'MERGED\tCLEAN\tsha1\tmain\t0'
+PRLAND_STUB_REQUIRED="ci"
+PRLAND_STUB_CHECKRUNS=$'ci\tcompleted\tsuccess\t2026-09-22T10:00:00Z'
+export PRLAND_STUB_REQUIRED PRLAND_STUB_CHECKRUNS
 rc="$(run_sut "$SUT" 42 --repo test-owner/test-repo --state-dir "$WORK/state")"
 check "unconcluded checks are awaited even when this run did not move the head" "0 1 1" \
     "$rc $(calls "$LANDQ_STUB_CHECKS_LOG") $(calls "$PRLAND_STUB_MERGE_LOG")"
@@ -250,6 +262,9 @@ reset_scenario
 mkdir -p "$WORK/state4"
 printf '%s\n' "oldsha" > "$WORK/state4/test-owner_test-repo.pr42.head"
 set_reads $'OPEN\tCLEAN\tnewsha\tmain\t0' $'MERGED\tCLEAN\tnewsha\tmain\t0'
+PRLAND_STUB_REQUIRED="ci"
+PRLAND_STUB_CHECKRUNS=$'ci\tcompleted\tsuccess\t2026-09-22T10:00:00Z'
+export PRLAND_STUB_REQUIRED PRLAND_STUB_CHECKRUNS
 rc="$(run_sut "$SUT" 42 --repo test-owner/test-repo --state-dir "$WORK/state4")"
 check "unconcluded checks are awaited when the head moved outside this run" "0 1 1" \
     "$rc $(calls "$LANDQ_STUB_CHECKS_LOG") $(calls "$PRLAND_STUB_MERGE_LOG")"
@@ -361,6 +376,65 @@ check "an invalid --update-mode is a usage error" 2 "$rc"
 
 rc="$(run_sut "$SUT" 42 --repo test-owner/test-repo --merge-state-poll-s bogus)"
 check "an invalid --merge-state-poll-s is a usage error" 2 "$rc"
+
+# --- NWM-162: an unreadable branch-rules response is not a refusal. --------
+# homelab is private on GitHub Free, so its branch rules answer 403 and there
+# is no required-context list to wait for. This script read that as failure
+# and refused every homelab landing, where pr-land.sh already read it right.
+reset_scenario
+set_reads $'OPEN\tCLEAN\tsha1\tmain\t2' $'MERGED\tCLEAN\tsha1\tmain\t0'
+PRLAND_STUB_RULES_ERR="gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)"
+PRLAND_STUB_RULES_EXIT="1"
+export PRLAND_STUB_RULES_ERR PRLAND_STUB_RULES_EXIT
+rc="$(run_sut "$SUT" 42 --repo test-owner/test-repo --state-dir "$WORK/state162a")"
+check "unreadable branch rules do not refuse the landing" "0 0 1" \
+    "$rc $(calls "$LANDQ_STUB_CHECKS_LOG") $(calls "$PRLAND_STUB_MERGE_LOG")"
+check "  ...and it says so rather than failing silently" 1 \
+    "$(grep -c 'are unreadable (403/404)' "$WORK/stdout")"
+
+reset_scenario
+set_reads $'OPEN\tCLEAN\tsha1\tmain\t2' $'MERGED\tCLEAN\tsha1\tmain\t0'
+PRLAND_STUB_RULES_ERR="gh: Not Found (HTTP 404)"
+export PRLAND_STUB_RULES_ERR
+rc="$(run_sut "$SUT" 42 --repo test-owner/test-repo --state-dir "$WORK/state162b")"
+check "a 404 is read the same way as a 403" "0 0 1" \
+    "$rc $(calls "$LANDQ_STUB_CHECKS_LOG") $(calls "$PRLAND_STUB_MERGE_LOG")"
+
+# Measured-and-none reaches the same decision by a different route, and says
+# a different thing: the two are not collapsed in the output either.
+reset_scenario
+set_reads $'OPEN\tCLEAN\tsha1\tmain\t2' $'MERGED\tCLEAN\tsha1\tmain\t0'
+rc="$(run_sut "$SUT" 42 --repo test-owner/test-repo --state-dir "$WORK/state162c")"
+check "a base that measurably requires nothing is not waited on either" "0 0 1" \
+    "$rc $(calls "$LANDQ_STUB_CHECKS_LOG") $(calls "$PRLAND_STUB_MERGE_LOG")"
+check "  ...and is reported as measured, not as unreadable" "1 0" \
+    "$(grep -c 'requires no checks' "$WORK/stdout") $(grep -c 'unreadable' "$WORK/stdout")"
+
+# THE DISCRIMINATING HALF. A fix that simply stopped checking would pass every
+# case above and remove the protection. Required contexts that ARE readable
+# and have NOT passed must still refuse.
+reset_scenario
+set_reads $'OPEN\tCLEAN\tsha1\tmain\t2' $'MERGED\tCLEAN\tsha1\tmain\t0'
+PRLAND_STUB_REQUIRED="ci"
+LANDQ_STUB_CHECKS_EXIT="1"
+export PRLAND_STUB_REQUIRED LANDQ_STUB_CHECKS_EXIT
+rc="$(run_sut "$SUT" 42 --repo test-owner/test-repo --state-dir "$WORK/state162d")"
+check "readable required checks that fail still refuse, and never merge" "1 1 0" \
+    "$rc $(calls "$LANDQ_STUB_CHECKS_LOG") $(calls "$PRLAND_STUB_MERGE_LOG")"
+check "  ...naming the checks as the reason" 1 \
+    "$(grep -c 'required checks did not all pass' "$WORK/stderr")"
+
+# A rules read that failed for some OTHER reason is not evidence of anything,
+# so it refuses rather than assuming there is nothing to wait for.
+reset_scenario
+set_reads $'OPEN\tCLEAN\tsha1\tmain\t2' $'MERGED\tCLEAN\tsha1\tmain\t0'
+PRLAND_STUB_RULES_ERR="gh: Bad credentials (HTTP 401)"
+export PRLAND_STUB_RULES_ERR
+rc="$(run_sut "$SUT" 42 --repo test-owner/test-repo --state-dir "$WORK/state162e")"
+check "a rules read that failed for another reason refuses, and never merges" "1 0" \
+    "$rc $(calls "$PRLAND_STUB_MERGE_LOG")"
+check "  ...naming the read rather than the checks" 1 \
+    "$(grep -c 'land-queue.sh: refusing PR 42 — could not read branch rules' "$WORK/stderr")"
 
 echo
 echo "$((PASS + FAIL)) assertion(s), $PASS passed, $FAIL failed"

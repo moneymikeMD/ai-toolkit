@@ -50,6 +50,10 @@
 
 set -uo pipefail
 
+PR_LAND_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/ghkit.sh
+. "$PR_LAND_DIR/lib/ghkit.sh"
+
 PR=""
 REPO=""
 DRY_RUN=0
@@ -174,32 +178,18 @@ if [ "$pr_state" != "OPEN" ]; then
     exit 1
 fi
 
-# unreadable_branch_rules_error MSG — true when a branch-rules read failed
-# because the rules are not visible (403/404), not because of a transport
-# fault. A free-plan private repo answers 403 for a call it would answer
-# with an empty list on a plan that could show rules at all.
-unreadable_branch_rules_error() {
-    case "$1" in
-        *'(HTTP 403)'*|*'(HTTP 404)'*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-rules_output="$(gh api "repos/$REPO/rules/branches/$base_branch" \
-    --jq '.[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context' \
-    2>&1)"
+required_raw=""
+gh_required_contexts "$REPO" "$base_branch" required_raw
 rules_rc=$?
-
-if [ "$rules_rc" -eq 0 ]; then
-    required_raw="$(printf '%s\n' "$rules_output" | sort -u)"
-elif unreadable_branch_rules_error "$rules_output"; then
-    echo "pr-land.sh: branch rules for $REPO@$base_branch are unreadable (403/404) — treating as no required contexts, not a refusal" >&2
-    required_raw=""
-else
-    echo "pr-land.sh: could not read branch rules for $REPO@$base_branch" >&2
-    printf '%s\n' "$rules_output" >&2
-    exit 1
-fi
+case "$rules_rc" in
+    0) ;;
+    3) echo "pr-land.sh: branch rules for $REPO@$base_branch are unreadable (403/404) — treating as no required contexts, not a refusal" >&2 ;;
+    *)
+        echo "pr-land.sh: could not read branch rules for $REPO@$base_branch" >&2
+        printf '%s\n' "$required_raw" >&2
+        exit 1
+        ;;
+esac
 
 check_runs_raw="$(gh api --paginate "repos/$REPO/commits/$head_sha/check-runs" \
     --jq '.check_runs[] | [.name, .status, (.conclusion // "null"), (.started_at // "")] | @tsv')" || {

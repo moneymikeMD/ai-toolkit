@@ -444,6 +444,16 @@ scripts/land-queue.sh 42 --merge-state-poll-s 90
 scripts/land-queue.sh 42 --dry-run
 ```
 
+**A base whose required contexts cannot be read is not a refusal.** A private
+repo on GitHub Free answers 403 for the call a plan that could show rules
+would answer with an empty list, so there is nothing to wait for — and
+`gh pr checks --required` exits non-zero there with *no required checks
+reported*, which this script used to read as failure and refuse every such
+landing (NWM-162). Both scripts now go through `lib/ghkit.sh`, which returns
+three outcomes rather than two: read, not-visible, failed. A rules read that
+failed for any *other* reason still refuses, because that is not evidence
+of an absence.
+
 It exists for two guarantees a lone merge decision does not provide: one
 landing at a time per repo (a lock keyed on the repo slug, never a checkout
 path), and freshness. Freshness is four things: a PR behind its base is updated
