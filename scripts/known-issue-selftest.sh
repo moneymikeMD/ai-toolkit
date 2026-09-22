@@ -207,6 +207,168 @@ else
     ok "test5: lint refuses when an entry file was hand-edited after known-issue.sh last wrote it"
 fi
 
+# NWM-145. The script lives in ai-toolkit and every real invocation is from
+# another repo, so "which repo does this write to" must not be decided by the
+# caller's cwd. TOOLKIT stands in for the ai-toolkit checkout; CALLER is the
+# repo cwd happens to be in; TARGET is the repo the operator means.
+TOOLKIT=$(fresh_repo toolkit)
+KI="$TOOLKIT/scripts/known-issue.sh"
+CALLER=$(fresh_repo caller)
+TARGET=$(fresh_repo target)
+
+caller_untouched() {
+    [ -z "$(git -C "$CALLER" status --porcelain)" ] \
+        && [ ! -e "$CALLER/docs/known-issues" ] \
+        && [ ! -e "$CALLER/docs/known-issues.md" ]
+}
+
+set +e
+(cd "$CALLER" && "$KI" --root "$TARGET" add \
+    --title "Root before verb" --severity LOW --body "b") >"$WORK/t6.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -ne 0 ]; then
+    bad "test6 (--root): the call failed ($RC):
+$(cat "$WORK/t6.out")"
+elif [ ! -f "$TARGET/docs/known-issues/root-before-verb.md" ]; then
+    bad "test6: --root did not write the entry into the target repo"
+elif ! caller_untouched; then
+    bad "test6: the entry (or the index) also landed in the caller's cwd repo:
+$(git -C "$CALLER" status --porcelain)"
+else
+    ok "test6: --root writes into the named repo and nothing into the caller's cwd repo"
+fi
+
+set +e
+(cd "$CALLER" && "$KI" add \
+    --title "Cwd default" --severity LOW --body "b") >"$WORK/t7.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -ne 0 ]; then
+    bad "test7 (cwd default): the call failed ($RC):
+$(cat "$WORK/t7.out")"
+elif [ ! -f "$CALLER/docs/known-issues/cwd-default.md" ]; then
+    bad "test7: without --root the entry did not land in the cwd repo — the plugin case is broken"
+else
+    ok "test7: without --root the repo still comes from cwd, so the plugin case is unbroken"
+fi
+rm -rf "$CALLER/docs/known-issues" "$CALLER/docs/known-issues.md"
+git -C "$CALLER" checkout -q -- . 2>/dev/null || true
+
+set +e
+(cd "$CALLER" && "$KI" add \
+    --title "Root after verb" --severity HIGH --body "b" --root "$TARGET") >"$WORK/t8.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -ne 0 ] || [ ! -f "$TARGET/docs/known-issues/root-after-verb.md" ]; then
+    bad "test8: --root after the subcommand's own options did not take ($RC):
+$(cat "$WORK/t8.out")"
+elif ! caller_untouched; then
+    bad "test8: something landed in the caller's cwd repo"
+else
+    ok "test8: --root is recognised after the subcommand as well as before it"
+fi
+
+set +e
+(cd "$CALLER" && "$KI" lint "--root=$TARGET") >"$WORK/t9.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -ne 0 ]; then
+    bad "test9: the --root=PATH form was not accepted ($RC):
+$(cat "$WORK/t9.out")"
+elif ! grep -q "^OK: 2 entries" "$WORK/t9.out"; then
+    bad "test9: --root=PATH linted something other than the target's 2 entries:
+$(cat "$WORK/t9.out")"
+else
+    ok "test9: the --root=PATH form names the same repo as --root PATH"
+fi
+
+mkdir -p "$WORK/notarepo"
+set +e
+(cd "$TARGET" && "$KI" --root "$WORK/notarepo" lint) >"$WORK/t10.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ]; then
+    bad "test10: --root at a directory that is not a git repo exited 0"
+elif ! grep -q "not a git repository: $WORK/notarepo" "$WORK/t10.out"; then
+    bad "test10: it failed but did not name the directory:
+$(cat "$WORK/t10.out")"
+elif [ -e "$WORK/notarepo/docs" ]; then
+    bad "test10: it wrote into the directory it rejected"
+else
+    ok "test10: --root at a non-git directory dies naming it, and writes nothing"
+fi
+
+set +e
+(cd "$TARGET" && "$KI" --root "$WORK/no-such-dir" lint) >"$WORK/t11.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ] || ! grep -q "no such directory: $WORK/no-such-dir" "$WORK/t11.out"; then
+    bad "test11: --root at a missing directory did not die naming it ($RC):
+$(cat "$WORK/t11.out")"
+else
+    ok "test11: --root at a missing directory dies naming it"
+fi
+
+# The LAB-228 shape: a harness writing --root "$SOME_UNSET_VAR" must fail here
+# rather than read as "no --root given" and silently fall back to cwd, which
+# is the exact target this flag exists to take away from cwd.
+set +e
+(cd "$CALLER" && "$KI" --root "" add \
+    --title "Empty root" --severity LOW --body "b") >"$WORK/t12.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ]; then
+    bad "test12: an empty --root exited 0"
+elif ! grep -q -- "--root: PATH is empty" "$WORK/t12.out"; then
+    bad "test12: an empty --root failed but not for the empty reason:
+$(cat "$WORK/t12.out")"
+elif ! caller_untouched; then
+    bad "test12: an empty --root fell back to cwd and wrote into the caller's repo"
+else
+    ok "test12: an empty --root dies rather than falling back to cwd"
+fi
+
+# An argument sitting in a value-taking option's slot is a value, never the
+# global flag. If --root were lifted out here, --note would lose its argument;
+# because it is not, the path after it is what `add` rejects.
+set +e
+(cd "$CALLER" && "$KI" add --title "Value slot" --severity LOW --body "b" \
+    --note --root "$TARGET") >"$WORK/t13.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ]; then
+    bad "test13: the malformed call exited 0"
+elif ! grep -q "unknown option: $TARGET" "$WORK/t13.out"; then
+    bad "test13: --root was lifted out of --note's value slot:
+$(cat "$WORK/t13.out")"
+else
+    ok "test13: --root in a value-taking option's slot stays that option's value"
+fi
+
+mkdir -p "$TARGET/docs/deep/deeper"
+set +e
+(cd "$CALLER" && "$KI" --root "$TARGET/docs/deep/deeper" lint) >"$WORK/t14.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -ne 0 ] || ! grep -q "^OK: 2 entries" "$WORK/t14.out"; then
+    bad "test14: --root at a subdirectory did not resolve to the repo toplevel ($RC):
+$(cat "$WORK/t14.out")"
+else
+    ok "test14: --root at a subdirectory resolves to that repo's toplevel, as cwd does"
+fi
+
+set +e
+(cd "$CALLER" && "$KI" lint --root) >"$WORK/t15.out" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ] || ! grep -q -- "--root needs a PATH" "$WORK/t15.out"; then
+    bad "test15: a trailing --root with no PATH did not die naming the flag ($RC):
+$(cat "$WORK/t15.out")"
+else
+    ok "test15: --root with no PATH dies rather than swallowing the next thing"
+fi
+
 echo
 echo "$PASS passed, $FAIL failed (against: $KNOWN_ISSUE)"
 [ "$FAIL" -eq 0 ]

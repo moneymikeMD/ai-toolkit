@@ -221,12 +221,26 @@ it is the part most likely to be forgotten later.
 `known-issue.sh` takes its target from `git rev-parse --show-toplevel`, not
 from its own location, which is what makes it work at all when invoked by
 absolute path from outside — the surface every script here is consumed on.
-There is **no `--root` flag**; that is NWM-145 and still open. So the repo a
-call lands in is decided by cwd: run it with cwd inside the repo being managed,
-never inside this one, or it writes `docs/known-issues/` into ai-toolkit. From
-a worktree with drifted cwd it silently targets the wrong repo. Until NWM-145
-lands, that is a precondition callers must hold, not something the script
-checks.
+**`--root PATH` landed under NWM-145 (2026-09-22)** and is recognised anywhere
+in the argument list, so a call can name its target instead of inheriting it.
+cwd stays the default, deliberately: a plugin script runs from
+`${CLAUDE_PLUGIN_ROOT}`, outside the target repo entirely, and changing the
+default would break that case.
+
+So the hazard is now a choice rather than a precondition. A call without
+`--root` still lands wherever cwd is, and from a worktree with drifted cwd
+that is silently the wrong repo — it happened twice in one week (NWM-122,
+NWM-142). Pass `--root` from anything that is not already standing in the
+repo it means to write to.
+
+The two live `lint` call sites were measured on 2026-09-22 and neither can
+write into the wrong repo: `lint` is read-only (it loads, compares and
+prints — no write path), night-watchman's CI runs it with cwd at its own
+checkout, and homelab's `lint.sh` wraps it in `(cd "$REPO_ROOT" && …)`. Both
+were run against their real corpora — 27 and 107 entries — with the target
+trees' digests identical before and after. Adopting `--root` at those two
+call sites is NWM-159 and LAB-298, filed so the correctness stops depending
+on a caller holding cwd right.
 
 **No `known-issue` composite action is published, and that is deliberate.**
 NWM-128's text asks for one, written when this repo did not yet exist (it still
