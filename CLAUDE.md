@@ -124,11 +124,40 @@ because the rulesets API answers 403 there and the two are different facts.
 Its state-store write is a marked seam, not an implementation: LAB-291's CLI
 does not exist yet, so only the `repos.yaml` half is live.
 
-**`scripts/` is not yet the complete set it is meant to be.** Of the five
-assigned here, `known-issue.sh` has arrived; `script-analytics.py`,
-`script-retire.sh` (NWM-130), `claude-cost.py` (NWM-129) and `land-branch.sh`
-(NWM-131) have not, so each still lives duplicated in the consuming repos,
-diverging. Do not read the current contents as the intended set.
+**The five scripts assigned here are settled, as of 2026-09-22.**
+`known-issue.sh` arrived under NWM-128; `script-analytics.py` and
+`script-retire.sh` arrived together under NWM-130. `claude-cost.py` is
+**closed and is not coming** — NWM-129, owner decision: a script invoked by a
+hook inside a shipped plugin is machine-applied, not repo-consumed, so it
+stays on the plugin side of the boundary rule. `land-branch.sh` is NWM-131, a
+wrapper split rather than a move, and is still open.
+
+### `script-analytics.py` and `script-retire.sh`, and two things to know
+
+They came together because `script-retire.sh --events FILE` consumes what
+`script-analytics.py` records; splitting them leaves a half-working pair. Both
+are night-watchman's copies, which are the later hardened ones.
+
+**This repo does not ship `templates/claude-prices.tsv`, and that is
+deliberate.** `script-analytics.py` resolves its price table in order:
+`$CLAUDE_PRICES_TSV`, then `<script>/../templates/`, then `<script>/`, then
+`$CLAUDE_PROJECT_DIR/templates/`, then `$CLAUDE_PROJECT_DIR/`. Shipping a
+table here would win at candidate two and **silently shadow every consumer's
+own prices** — measured 2026-09-22: with one present, night-watchman's run
+resolved to ai-toolkit's table rather than its own; with it absent, to
+`night-watchman/templates/claude-prices.tsv`, which is right. With nothing to
+find it raises an error naming every path it tried plus `--prices` and
+`$CLAUDE_PRICES_TSV`. The price table is the consumer's data, not this tool's.
+The selftest pins its own copy under `scripts/fixtures/` so a price edit
+anywhere cannot redden it.
+
+**`script-retire.sh --yes` requires a `land-branch.sh` that is not here.** It
+resolves `${LAND_BRANCH_SH:-$HERE/land-branch.sh}`, and the existence check
+sits inside the `--yes` branch only. So report mode works fine with no
+land-branch.sh (measured: exit 0), and `--yes` fails loudly — `Error: cannot
+find land-branch.sh at …` — rather than half-landing. That is a documented
+precondition, not a defect: set `$LAND_BRANCH_SH` to the consuming repo's copy
+before using `--yes`. The parameter already existed; nothing needed adding.
 
 ### `scripts/lib/kit.sh` — why there is a library here now
 

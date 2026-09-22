@@ -1,0 +1,153 @@
+# ./jira-api.sh raw GET /issue/PROJ-63/changelog
+# Captured 2026-09-14 against the real yourteam.atlassian.net PROJ project
+# (PROJ-63, "P14 — script-analytics.py: port invoke events, report --usage
+# keep/retire?/flag, owner_wait, and the three PROJ-217 live-run fixes").
+# `op` credentials were not resolvable from this sandboxed worktree, so the
+# live GET went through the claude.ai Atlassian Rovo connector's
+# getJiraIssue(expand=changelog) instead of jira-api.sh directly — same
+# underlying Jira changelog data, reshaped from that call's `histories`
+# array into this endpoint's own `values`/`isLast`/`total` envelope. No
+# redaction needed: none of these fields (self/accountId/displayName/
+# avatarUrls/created/items) match KIT_SECRET_WORDS or KIT_SECRET_FRAGMENTS
+# in providers/tracker/jira/lib/http.sh, so jira-api.sh's own redact_json
+# would leave this response exactly as printed below.
+{
+  "startAt": 0,
+  "maxResults": 6,
+  "total": 6,
+  "isLast": true,
+  "values": [
+    {
+      "id": "12539",
+      "created": "2026-09-14T07:45:31.124-0400",
+      "items": [
+        {
+          "field": "executor",
+          "fieldtype": "custom",
+          "fieldId": "customfield_10047",
+          "from": null,
+          "fromString": null,
+          "to": "10020",
+          "toString": "agent"
+        },
+        {
+          "field": "labels",
+          "fieldtype": "jira",
+          "fieldId": "labels",
+          "from": null,
+          "fromString": "",
+          "to": null,
+          "toString": "cost parity script-analytics"
+        },
+        {
+          "field": "touches",
+          "fieldtype": "custom",
+          "fieldId": "customfield_10043",
+          "from": null,
+          "fromString": null,
+          "to": "",
+          "toString": "scripts/script-analytics.py\n\nscripts/script-analytics-selftest.sh\n\nscripts/fixtures/script-analytics/**"
+        },
+        {
+          "field": "verify",
+          "fieldtype": "custom",
+          "fieldId": "customfield_10044",
+          "from": null,
+          "fromString": null,
+          "to": "",
+          "toString": "scripts/script-analytics-selftest.sh (elided in this fixture; see PROJ-63 for the full text)"
+        },
+        {
+          "field": "appends",
+          "fieldtype": "custom",
+          "fieldId": "customfield_10046",
+          "from": null,
+          "fromString": null,
+          "to": "",
+          "toString": "docs/cost.md"
+        },
+        {
+          "field": "description",
+          "fieldtype": "jira",
+          "fieldId": "description",
+          "from": null,
+          "fromString": null,
+          "to": null,
+          "toString": "(elided in this fixture; see PROJ-63 for the full text)"
+        }
+      ]
+    },
+    {
+      "id": "12544",
+      "created": "2026-09-14T07:45:54.275-0400",
+      "items": [
+        {
+          "field": "IssueParentAssociation",
+          "fieldtype": "jira",
+          "from": null,
+          "fromString": null,
+          "to": "10616",
+          "toString": "PROJ-10"
+        }
+      ]
+    },
+    {
+      "id": "12553",
+      "created": "2026-09-14T07:47:05.832-0400",
+      "items": [
+        {
+          "field": "Sprint",
+          "fieldtype": "custom",
+          "fieldId": "customfield_10020",
+          "from": "",
+          "fromString": "",
+          "to": "69",
+          "toString": "2026-09-14 Sun"
+        }
+      ]
+    },
+    {
+      "id": "12559",
+      "created": "2026-09-14T07:47:46.949-0400",
+      "items": [
+        {
+          "field": "Link",
+          "fieldtype": "jira",
+          "from": null,
+          "fromString": null,
+          "to": "PROJ-64",
+          "toString": "This work item blocks PROJ-64"
+        }
+      ]
+    },
+    {
+      "id": "12561",
+      "created": "2026-09-14T07:47:49.454-0400",
+      "items": [
+        {
+          "field": "Link",
+          "fieldtype": "jira",
+          "from": null,
+          "fromString": null,
+          "to": "PROJ-65",
+          "toString": "This work item blocks PROJ-65"
+        }
+      ]
+    },
+    {
+      "id": "12570",
+      "created": "2026-09-14T08:08:46.781-0400",
+      "items": [
+        {
+          "field": "status",
+          "fieldtype": "jira",
+          "fieldId": "status",
+          "from": "10009",
+          "fromString": "To Do",
+          "to": "10014",
+          "toString": "Completed"
+        }
+      ]
+    }
+  ]
+}
