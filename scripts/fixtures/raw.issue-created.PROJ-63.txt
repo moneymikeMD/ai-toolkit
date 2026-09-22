@@ -1,0 +1,11 @@
+# ./jira-api.sh raw GET "/issue/PROJ-63?fields=created"
+# Captured 2026-09-14 against the real yourteam.atlassian.net PROJ project —
+# see raw.changelog.PROJ-63.txt for the full provenance note (same ticket,
+# same capture route via the claude.ai Atlassian Rovo connector since `op`
+# credentials were not resolvable from this sandboxed worktree). No
+# redaction needed: "created" does not match KIT_SECRET_WORDS/FRAGMENTS.
+{
+  "fields": {
+    "created": "2026-09-14T07:45:11.813-0400"
+  }
+}
