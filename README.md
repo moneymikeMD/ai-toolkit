@@ -478,6 +478,87 @@ somewhere else.
 It does not resolve a conflict; it turns a silent, discovered-late pile-up
 of PRs into immediate, serialized, one-at-a-time refusals.
 
+## land-core
+
+Merges a finished branch onto a target branch and pushes it, through a
+dedicated integration worktree. It is the generic half of a "land a ticket"
+script: it knows nothing about tickets, trackers, dispatch or multiplexers.
+A consuming repo supplies those through one hook script.
+
+```bash
+scripts/land-core.sh --repo /path/to/repo --branch feature
+scripts/land-core.sh --repo /path/to/repo --branch feature --label TKT-1
+scripts/land-core.sh --repo /path/to/repo --branch feature --hook ./lifecycle.sh
+scripts/land-core.sh --repo /path/to/repo --branch feature --dry-run
+```
+
+`pr-land.sh` merges a **pull request** through the GitHub API behind its
+required checks. This merges a **local branch** with git, in a worktree the
+caller never stands in. They are not alternatives to each other; a repo that
+lands through PRs wants `pr-land.sh`.
+
+**`--repo` is mandatory and has no cwd fallback.** Every script here is
+invoked by absolute path from outside the repo it acts on, and this one
+merges, pushes and deletes a branch. A cwd default would silently pick
+whichever repository the caller happened to be standing in — the hazard
+`script-retire.sh` hit as LAB-300, on a path that is destructive in the same
+way. Empty, missing or non-git is an error, never a fallback.
+
+### The four-point hook contract
+
+`--hook PATH` names one executable, called as `PATH <point>` with cwd set to
+the integration worktree. The four points are where a lifecycle has to
+interleave with git, and each one's failure semantics are already different:
+
+| Point | State when it runs | Non-zero means |
+| --- | --- | --- |
+| `pre-merge` | synced to `origin/<target>`, nothing merged | reset to `origin/<target>`, undoing any commit the hook made; exit 2 |
+| `post-merge` | the merge commit exists, lint has not run | revert the merge; exit 1 |
+| `pre-push` | lint passed, nothing pushed | revert the merge; exit 1 |
+| `post-push` | the push succeeded (or there was no remote) | recorded; cleanup still runs; exit 1 at the end. The landing stands and is never reverted |
+
+A hook commits at `pre-merge` and `pre-push`, and those commits are inside
+the pushed history — that is what makes a file-backed tracker's completion
+commit land with the work rather than after it.
+
+Context arrives as **environment variables, not positional arguments**, so
+adding one later cannot shift an existing hook's `$2`: `LAND_CORE_POINT`,
+`LAND_CORE_REPO` (the main worktree), `LAND_CORE_WORKTREE` (the integration
+worktree), `LAND_CORE_BRANCH`, `LAND_CORE_TARGET`, `LAND_CORE_LABEL`,
+`LAND_CORE_MERGE_SHA` (empty before the merge) and `LAND_CORE_PUSHED`. Exit 0
+from a point the hook does not handle.
+
+**Preflight belongs in the caller, not in a hook.** There is no fifth point
+before the lock: a wrapper validates whatever it needs to — a ticket's stage,
+a tracker's status — and only then calls this. That keeps a refusal from
+creating an integration worktree first.
+
+### What it does with the worktree
+
+Merge, lint and push run in `<parent-of-the-main-worktree>/<repo>-land`,
+never in `--repo` itself. Every run resets it to `origin/<target>`; a dirty
+one is refused unless `--reset-land` is passed; a concurrent run is refused
+by the lock at `<worktree>.lock`, which is never waited on and whose holder
+is reclaimed if its pid is not running. The main worktree is **not**
+fast-forwarded afterwards, because a sibling may hold uncommitted edits
+there; the summary prints the `git pull --ff-only` to run by hand.
+
+Reverting the merge is `git reset --hard ORIG_HEAD`, so a commit a
+`pre-merge` hook made survives it, unpushed. The next run's reset to
+`origin/<target>` discards it.
+
+**`--dry-run` calls no hook** and runs no mutating command, including
+creating the integration worktree. A consumer prints its own plan around
+this one rather than expecting hooks to print theirs mid-run.
+
+**`--lint-cmd` runs through `bash -c`**, so `a && b` is evaluated rather than
+passed to `a` as two literal arguments. night-watchman's `land-branch.sh`
+word-splits it instead, which is filed as a known issue there; the
+consequence worth naming is that `true && false` *passes* under word
+splitting, so a red lint lands. The default, when no command is given, is
+`./scripts/lint.sh` in the merged tree if it is executable, else a warning
+and no gate.
+
 ## release-publish
 
 Publishes a release-please release end to end: checks the open PR against

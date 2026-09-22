@@ -440,7 +440,10 @@ if [ -n "$BRANCH_WT" ] && [ "$BRANCH_WT" != "$MAIN_WORKTREE" ] && [ -e "$BRANCH_
     esac
 fi
 
-if git -C "$MAIN_WORKTREE" branch -d "$BRANCH" >/dev/null 2>&1; then
+# Run from the integration worktree, whose HEAD carries the merge: `git
+# branch -d` refuses a branch not merged into the HEAD it is run against,
+# and the main worktree is deliberately left un-fast-forwarded.
+if git branch -d "$BRANCH" >/dev/null 2>&1; then
     echo "deleted local branch '$BRANCH'."
 else
     warn "could not delete local branch '$BRANCH' — left in place"

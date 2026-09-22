@@ -35,32 +35,33 @@ lacks() {
 $hay" ;; *) ok "$name" ;; esac
 }
 
-N=0
 # newrepo [--no-remote] — echo a fresh repo dir with main pushed to a local
-# bare origin and a one-commit `feature` branch waiting to land.
+# bare origin and a one-commit `feature` branch waiting to land. mktemp, not
+# a counter: this runs in a command substitution, so a counter never advances
+# in the caller and every case would reuse one directory.
 newrepo() {
-    local remote=1
+    local remote=1 d
     [ "${1:-}" = "--no-remote" ] && remote=0
-    N=$((N + 1))
-    local d="$WORK/r$N"
-    mkdir -p "$d"
-    git init -q -b main "$d/repo"
-    git -C "$d/repo" config user.email "selftest@example.invalid"
-    git -C "$d/repo" config user.name "land-core selftest"
-    git -C "$d/repo" config commit.gpgsign false
-    echo base > "$d/repo/base.txt"
-    git -C "$d/repo" add -A
-    git -C "$d/repo" commit -qm base
-    if [ "$remote" = 1 ]; then
-        git init -q --bare -b main "$d/origin.git"
-        git -C "$d/repo" remote add origin "$d/origin.git"
-        git -C "$d/repo" push -q origin main
-    fi
-    git -C "$d/repo" checkout -q -b feature
-    echo work > "$d/repo/work.txt"
-    git -C "$d/repo" add -A
-    git -C "$d/repo" commit -qm "feature work"
-    git -C "$d/repo" checkout -q main
+    d=$(mktemp -d "$WORK/repoXXXXXX")
+    {
+        git init -q -b main "$d/repo"
+        git -C "$d/repo" config user.email "selftest@example.invalid"
+        git -C "$d/repo" config user.name "land-core selftest"
+        git -C "$d/repo" config commit.gpgsign false
+        echo base > "$d/repo/base.txt"
+        git -C "$d/repo" add -A
+        git -C "$d/repo" commit -qm base
+        if [ "$remote" = 1 ]; then
+            git init -q --bare -b main "$d/origin.git"
+            git -C "$d/repo" remote add origin "$d/origin.git"
+            git -C "$d/repo" push -q origin main
+        fi
+        git -C "$d/repo" checkout -q -b feature
+        echo work > "$d/repo/work.txt"
+        git -C "$d/repo" add -A
+        git -C "$d/repo" commit -qm "feature work"
+        git -C "$d/repo" checkout -q main
+    } >/dev/null 2>&1
     printf '%s' "$d"
 }
 
@@ -113,9 +114,12 @@ check "a --hook that is not executable is refused" 2 "$RC"
 
 # The LAB-300 class: cwd must never decide which repository is landed.
 D2=$(newrepo)
+D2_BEFORE=$(repo_main "$D2")
 run_in "$D2/repo" --branch feature
 check "standing inside a repo does not supply --repo" 2 "$RC"
-check "the refusal left that repo's main alone" "$(repo_main "$D2")" "$(repo_main "$D2")"
+check "the refusal left that repo's main alone" "$D2_BEFORE" "$(repo_main "$D2")"
+check "the refusal pushed nothing to that repo's origin" "$D2_BEFORE" "$(origin_main "$D2")"
+[ -e "$D2/repo-land" ] && nope "the refusal built no integration worktree" "$D2/repo-land exists" || ok "the refusal built no integration worktree"
 
 echo
 echo "== happy path =="
@@ -155,18 +159,27 @@ check "a failing --lint-cmd exits 1" 1 "$RC"
 check "a failing lint pushes nothing" "$BEFORE" "$(origin_main "$D")"
 check "a failing lint reverts the merge" "$BEFORE" "$(git -C "$D/repo-land" rev-parse HEAD)"
 
-# The word-splitting fix: night-watchman's copy runs $LINT_CMD unquoted, so
-# a shell operator arrives as a literal argument and lint fails.
+# The word-splitting fix. Running $LINT_CMD unquoted passes the operator to
+# the first word as an argument, so `false || true` fails a lint that should
+# pass and `true && false` passes one that should fail. The second direction
+# is the dangerous one: a red lint lands.
 D=$(newrepo)
-run --repo "$D/repo" --branch feature --lint-cmd "true && true"
-check "--lint-cmd goes through bash -c, so '&&' works" 0 "$RC"
+run --repo "$D/repo" --branch feature --lint-cmd "false || true"
+check "--lint-cmd goes through bash -c, so '||' is evaluated" 0 "$RC"
 
 D=$(newrepo)
-git -C "$D/repo" checkout -q feature
+BEFORE=$(origin_main "$D")
+run --repo "$D/repo" --branch feature --lint-cmd "true && false"
+check "--lint-cmd '&&' is evaluated, so a red lint still fails" 1 "$RC"
+check "a word-split lint cannot push a red tree" "$BEFORE" "$(origin_main "$D")"
+
+D=$(newrepo)
+git -C "$D/repo" checkout -q feature 2>/dev/null
 mkdir -p "$D/repo/scripts"
 printf '#!/usr/bin/env bash\nexit 1\n' > "$D/repo/scripts/lint.sh"
 chmod +x "$D/repo/scripts/lint.sh"
-git -C "$D/repo" add -A && git -C "$D/repo" commit -qm "add a failing lint"
+git -C "$D/repo" add -A >/dev/null 2>&1
+git -C "$D/repo" commit -qm "add a failing lint" >/dev/null 2>&1
 git -C "$D/repo" checkout -q main
 BEFORE=$(origin_main "$D")
 run --repo "$D/repo" --branch feature
@@ -274,7 +287,7 @@ echo
 echo "== integration worktree and lock =="
 
 D=$(newrepo)
-git -C "$D/repo" worktree add -q --detach "$D/repo-land" main
+git -C "$D/repo" worktree add -q --detach "$D/repo-land" main >/dev/null 2>&1
 echo dirt > "$D/repo-land/dirt.txt"
 run --repo "$D/repo" --branch feature
 check "a dirty integration worktree is refused" 2 "$RC"
@@ -296,7 +309,7 @@ run --repo "$D/repo" --branch feature
 check "a lock held by a dead pid is reclaimed" 0 "$RC"
 
 D=$(newrepo)
-git -C "$D/repo" worktree add -q "$D/feature-wt" feature
+git -C "$D/repo" worktree add -q "$D/feature-wt" feature >/dev/null 2>&1
 echo uncommitted > "$D/feature-wt/scratch.txt"
 run --repo "$D/repo" --branch feature
 check "a dirty worktree holding the branch is refused" 2 "$RC"
