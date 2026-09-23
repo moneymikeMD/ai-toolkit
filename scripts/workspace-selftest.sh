@@ -93,7 +93,16 @@ set +e
 "$WS" bogus-verb >/dev/null 2>&1; check "unknown verb exits 2" "$?" "2"
 "$WS" foreach --root "$WORK" >/dev/null 2>&1; check "foreach with no command exits 2" "$?" "2"
 "$WS" list --root "$TMP/remotes" >/dev/null 2>&1; check "missing manifest exits 2" "$?" "2"
+"$WS" --root "$WORK" >/dev/null 2>&1; check "options with no verb exit 2" "$?" "2"
+"$WS" list status --root "$WORK" >/dev/null 2>&1; check "a second verb exits 2" "$?" "2"
+"$WS" --root "$WORK" -- pwd >/dev/null 2>&1; check "-- before a verb exits 2" "$?" "2"
+"$WS" --root "$WORK" list >/dev/null 2>&1; check "--root before the verb exits 0" "$?" "0"
 set -e
+check "--root before the verb lists what verb-first lists" \
+    "$("$WS" --root "$WORK" list)" "$("$WS" list --root "$WORK")"
+check "--dry-run and --root before clone match the verb-first dry run" \
+    "$("$WS" --dry-run --root "$WORK" clone 2>&1)" "$("$WS" clone --root "$WORK" --dry-run 2>&1)"
+check "--help after the verb exits 0" "$("$WS" list --help >/dev/null 2>&1; echo $?)" "0"
 
 echo "== list"
 LINES=$("$WS" list --root "$WORK" | tail -n +2 | wc -l | tr -d ' ')

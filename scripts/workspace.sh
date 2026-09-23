@@ -9,7 +9,7 @@
 # may read, not which commit each one sits at.
 #
 # Usage:
-#   workspace.sh <verb> [--root PATH] [args]
+#   workspace.sh [--root PATH] <verb> [args]   (options go either side of the verb)
 #
 #   list                  one line per repo: name, branch, agent flag, url
 #   clone                 clone any repo missing from disk (skips url: null)
@@ -38,24 +38,27 @@ usage() { sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'; }
 
 [ $# -ge 1 ] || { usage; exit 2; }
 
-case "$1" in
-    -h|--help) usage; exit 0 ;;
-    list|clone|status|pull|foreach|gen-settings) VERB="$1"; shift ;;
-    *) die_usage "unknown verb '$1' (try --help)" ;;
-esac
-
 FOREACH_CMD=""
 while [ $# -gt 0 ]; do
     case "$1" in
+        -h|--help) usage; exit 0 ;;
         --root)
             [ $# -ge 2 ] || die_usage "--root needs a PATH"
             ROOT="$2"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
-        --) shift; FOREACH_CMD="$*"; break ;;
-        *) die_usage "unexpected argument '$1'" ;;
+        --)
+            [ -n "$VERB" ] || die_usage "'--' before a verb (try --help)"
+            shift; FOREACH_CMD="$*"; break ;;
+        list|clone|status|pull|foreach|gen-settings)
+            [ -z "$VERB" ] || die_usage "unexpected argument '$1'"
+            VERB="$1"; shift ;;
+        *)
+            [ -n "$VERB" ] || die_usage "unknown verb '$1' (try --help)"
+            die_usage "unexpected argument '$1'" ;;
     esac
 done
 
+[ -n "$VERB" ] || die_usage "no verb given (try --help)"
 [ "$VERB" != "foreach" ] || [ -n "$FOREACH_CMD" ] || die_usage "foreach needs -- CMD..."
 
 if [ -z "$ROOT" ]; then
