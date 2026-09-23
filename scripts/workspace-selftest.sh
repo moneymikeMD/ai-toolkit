@@ -6,6 +6,16 @@
 # bare repo, so the suite never reaches the network and never touches a real
 # workspace.
 #
+# LAB-307 put a second top-level key in repos.yaml. adjacent_repos: names repos
+# whose landing policy protections.sh records but which are NOT subdirectories
+# of the workspace, and workspace.sh must not see them at all. Asserting that
+# is only worth anything if the assertion can fail, so the two fixture entries
+# below are built to be reachable: one has a real remote and no directory, so a
+# leak into `clone` would create it; the other has a real directory that is
+# behind its remote, so a leak into `pull` would fast-forward it and a leak into
+# `foreach` would visit it. Both carry agent: true, so a leak into gen-settings
+# would widen the agent's read scope.
+#
 # Usage: workspace-selftest.sh
 
 set -eu
@@ -37,6 +47,8 @@ mk_remote() {
 mkdir -p "$TMP/remotes"
 mk_remote alpha
 mk_remote beta
+mk_remote gamma
+mk_remote delta
 
 WORK="$TMP/ws"
 mkdir -p "$WORK"
@@ -58,9 +70,22 @@ repos:
   plain-dir:
     url: null
     agent: false
+adjacent_repos:
+  adjacent-one:
+    url: $TMP/remotes/gamma.git
+    branch: main
+    agent: true
+  adjacent-two:
+    url: $TMP/remotes/delta.git
+    branch: main
+    agent: true
 extra_agent_dirs:
   - $TMP/extra
 YAML
+
+# adjacent-two exists from the start, so a leak into pull, foreach or
+# gen-settings has a real directory to act on and is caught rather than skipped.
+git_quiet clone "$TMP/remotes/delta.git" "$WORK/adjacent-two"
 
 echo "== usage and arguments"
 "$WS" --help >/dev/null 2>&1; check "--help exits 0" "$?" "0"
@@ -73,15 +98,21 @@ set -e
 echo "== list"
 LINES=$("$WS" list --root "$WORK" | tail -n +2 | wc -l | tr -d ' ')
 check "lists every repo including local-only" "$LINES" "4"
+check "and no adjacent_repos entry" \
+    "$("$WS" list --root "$WORK" | grep -c 'adjacent-')" "0"
 
 echo "== clone"
 "$WS" clone --root "$WORK" --dry-run > "$TMP/dry.txt" 2>&1
 check "dry-run clones nothing" "$([ -d "$WORK/alpha" ] && echo present || echo absent)" "absent"
 check "dry-run skips a null url" "$(grep -c 'skip   local-only' "$TMP/dry.txt")" "1"
+check "dry-run does not propose cloning an adjacent entry" \
+    "$(grep -c 'adjacent-one' "$TMP/dry.txt")" "0"
 "$WS" clone --root "$WORK" >/dev/null 2>&1
 check "clone created alpha" "$([ -d "$WORK/alpha/.git" ] && echo yes || echo no)" "yes"
 check "clone created beta" "$([ -d "$WORK/beta/.git" ] && echo yes || echo no)" "yes"
 check "clone skipped local-only" "$([ -d "$WORK/local-only" ] && echo yes || echo no)" "no"
+check "clone did not create an adjacent entry, though its remote is real" \
+    "$([ -e "$WORK/adjacent-one" ] && echo yes || echo no)" "no"
 "$WS" clone --root "$WORK" >/dev/null 2>&1; check "clone is idempotent" "$?" "0"
 
 echo "== status"
@@ -90,11 +121,25 @@ check "absent repo reported ABSENT" "$(grep -c 'local-only .*ABSENT' "$TMP/statu
 echo "dirt" > "$WORK/alpha/dirty.txt"
 check "dirty file counted" "$("$WS" status --root "$WORK" | awk '$1=="alpha"{print $3}')" "1"
 rm "$WORK/alpha/dirty.txt"
+check "status does not report an adjacent entry missing" \
+    "$(grep -c 'adjacent-one' "$TMP/status.txt")" "0"
 check "manifested directory that is not a repo starts ABSENT" \
     "$("$WS" status --root "$WORK" | awk '$1=="plain-dir"{print $4}')" "ABSENT"
 mkdir -p "$WORK/plain-dir"
 check "non-repo directory reported NOT-A-REPO" \
     "$("$WS" status --root "$WORK" | awk '$1=="plain-dir"{print $4}')" "NOT-A-REPO"
+
+echo "== an adjacent entry that does exist on disk is still not iterated"
+echo "later" > "$TMP/seed-delta/later.md"
+git_quiet -C "$TMP/seed-delta" add later.md
+git_quiet -C "$TMP/seed-delta" commit -m "later"
+git_quiet -C "$TMP/seed-delta" push origin main
+"$WS" pull --root "$WORK" > "$TMP/pull-adj.txt" 2>&1
+check "pull did not name it" "$(grep -c 'adjacent-two' "$TMP/pull-adj.txt")" "0"
+check "pull did not fast-forward it" \
+    "$([ -f "$WORK/adjacent-two/later.md" ] && echo yes || echo no)" "no"
+"$WS" foreach --root "$WORK" -- 'pwd' > "$TMP/foreach-adj.txt" 2>&1
+check "foreach did not visit it" "$(grep -c 'adjacent-two' "$TMP/foreach-adj.txt")" "0"
 
 echo "== foreach propagates failure"
 set +e
@@ -135,6 +180,8 @@ print('|'.join([
 ]))")
 check "only agent:true repos plus extras, sorted, absolute" \
     "${GOT%%|*}" "$TMP/extra,$WORK/alpha"
+check "an agent:true adjacent entry does not widen the read scope" \
+    "$(echo "${GOT%%|*}" | grep -c 'adjacent-')" "0"
 check "existing allow list preserved" "$(echo "$GOT" | cut -d'|' -f2)" "Bash(gh pr merge:*)"
 check "unrelated keys preserved" "$(echo "$GOT" | cut -d'|' -f3)" "keep me"
 check "stale entry replaced, not appended" \

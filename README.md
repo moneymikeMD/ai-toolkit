@@ -631,6 +631,12 @@ scripts/workspace.sh status --root ~/code/other-workspace
 work from inside any project in the workspace. `--dry-run` makes `clone` and
 `gen-settings` print instead of act.
 
+**Only `repos:` is a member.** A manifest may also carry an `adjacent_repos:`
+key, for repos whose landing policy `protections.sh` records but which are not
+subdirectories of the workspace. Every verb here ignores that key: those
+entries are never listed, cloned, pulled, iterated by `foreach`, or added to
+`additionalDirectories`, whatever they set `agent` to.
+
 **No submodules and no pinning.** The manifest records which repos belong
 together and which an agent may read, never which commit each sits at. A
 workspace that must be restorable to an exact multi-repo state wants submodules
@@ -670,6 +676,17 @@ script, and nothing hand-written is touched:
 | `required_checks` | a list of contexts, `none`, or `unavailable` |
 | `code_owner` | a handle, `none`, or `unavailable` |
 | `protections_fetched_at` | UTC, when the three above were measured |
+
+**Two top-level keys are read.** `repos:` holds the workspace's own members,
+one per subdirectory. `adjacent_repos:` holds repos whose landing policy
+matters but which are not subdirectories of the workspace at all — the
+container repo the manifest itself lives in, a dotfiles checkout elsewhere on
+disk. Both are measured identically: the same generated keys, the same rows
+through `--store`, and the same `--check` drift gate, because a value written
+once and never compared is recorded rather than gated. The key is optional, a
+name appearing under both is an error rather than a merge, and `workspace.sh`
+reads only `repos:`. The emitted JSON carries `adjacent` per repo so a consumer
+can tell the two apart.
 
 `visibility` is fetched too, but the manifest already carries a hand-written
 `visibility` key, so it is checked rather than duplicated: a write run corrects

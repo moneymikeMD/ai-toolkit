@@ -11,6 +11,12 @@
 # at a time and asserts --check exits non-zero naming that repo — a --check
 # that has never been seen to fail is not known to work.
 #
+# LAB-307 added a second source of entries. adjacent_repos: holds repos whose
+# landing policy matters but which are not subdirectories of the workspace, and
+# the cases below assert they are measured, written, emitted and drift-checked
+# exactly as a member repo is — including one drift case aimed at an adjacent
+# entry, because a value written once and never compared is not gated.
+#
 # Usage: protections-selftest.sh [path-to-protections.sh]
 # Defaults to the sibling protections.sh. Pass an older revision's path to
 # reproduce the RED failures against pre-fix code.
@@ -99,6 +105,16 @@ stub "repos/t/echo/rulesets/4" '{"target":"branch","enforcement":"evaluate",
 
 stub "repos/t/foxtrot/rulesets" '[]'
 
+stub "repos/t/golf"  "$(repo_json public)"
+stub "repos/t/hotel" "$(repo_json private)"
+stub "repos/t/golf/rulesets" '[{"id":5}]'
+stub "repos/t/golf/rulesets/5" '{"target":"branch","enforcement":"active",
+ "conditions":{"ref_name":{"include":["~DEFAULT_BRANCH"],"exclude":[]}},
+ "rules":[{"type":"required_status_checks","parameters":{"required_status_checks":
+   [{"context":"ci-g"}]}}]}'
+stub_fail "repos/t/hotel/rulesets" \
+ '{"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.","status":"403"}'
+
 WS="$WORK/ws"
 mkdir -p "$WS"
 cat > "$WS/repos.yaml" <<'YAML'
@@ -151,6 +167,20 @@ repos:
     agent: false
     summary: No rulesets at all.
 
+# Not subdirectories of this workspace. Measured for policy, never cloned.
+adjacent_repos:
+  golf:
+    url: git@github.com:t/golf.git
+    branch: main
+    visibility: public
+    summary: The container repo this manifest itself lives in.
+
+  hotel:
+    url: git@github.com:t/hotel.git
+    branch: main
+    visibility: private
+    summary: A dotfiles checkout somewhere else on disk.
+
 # A trailing comment, also hand-written.
 extra_agent_dirs:
   - /tmp/extra
@@ -169,7 +199,13 @@ value_of() {
     python3 -c "
 import sys, yaml
 doc = yaml.safe_load(open(sys.argv[1]))
-v = (doc['repos'][sys.argv[2]] or {}).get(sys.argv[3], '<missing>')
+for section in ('repos', 'adjacent_repos'):
+    entry = (doc.get(section) or {}).get(sys.argv[2])
+    if entry is not None:
+        break
+else:
+    entry = {}
+v = (entry or {}).get(sys.argv[3], '<missing>')
 print(','.join(v) if isinstance(v, list) else v)
 " "$1" "$2" "$3"
 }
@@ -184,7 +220,8 @@ echo "== dry-run writes nothing"
 check "dry-run exits 0" "0" "$?"
 check "dry-run left the manifest alone" "same" \
     "$(cmp -s "$WS/repos.yaml" "$WORK/original.yaml" && echo same || echo changed)"
-check "dry-run printed a diff" "1" "$(grep -c '^+    landing: checks' "$WORK/dry.txt")"
+check "dry-run printed a diff covering both sections" "2" \
+    "$(grep -c '^+    landing: checks' "$WORK/dry.txt")"
 
 echo "== write"
 "$SUT" --root "$WS" > "$WORK/write.txt" 2>&1
@@ -198,9 +235,19 @@ check "a tag-target ruleset is ignored" "none" "$(value_of "$WS/repos.yaml" brav
 check "a ruleset on a non-default branch is ignored" "direct" "$(value_of "$WS/repos.yaml" delta landing)"
 check "an evaluate-mode ruleset enforces nothing" "direct" "$(value_of "$WS/repos.yaml" echo landing)"
 check "no rulesets means direct" "direct" "$(value_of "$WS/repos.yaml" foxtrot landing)"
-check "every repo got a UTC timestamp" "6" \
+check "every repo got a UTC timestamp" "8" \
     "$(grep -c 'protections_fetched_at: "[0-9-]*T[0-9:]*Z"' "$WS/repos.yaml")"
 check "the seam is reported on every write" "1" "$(grep -c 'state store: not written' "$WORK/write.txt")"
+
+echo "== adjacent_repos is measured exactly as a member repo is"
+check "a public adjacent entry gets a landing" "checks" "$(value_of "$WS/repos.yaml" golf landing)"
+check "its required_checks are recorded too" "ci-g" "$(value_of "$WS/repos.yaml" golf required_checks)"
+check "a private adjacent entry on Free is unavailable" "unavailable" \
+    "$(value_of "$WS/repos.yaml" hotel landing)"
+check "the table says which entries are adjacent" "2" "$(grep -c 'adjacent=yes' "$WORK/write.txt")"
+check "and says the members are not" "6" "$(grep -c 'adjacent=no' "$WORK/write.txt")"
+check "the write reports the two counts apart" "yes" \
+    "$(grep -q '(6 repos, 2 adjacent)' "$WORK/write.txt" && echo yes || echo no)"
 
 echo "== 403 is unavailable, never no-protections"
 check "landing unavailable" "unavailable" "$(value_of "$WS/repos.yaml" charlie landing)"
@@ -218,7 +265,7 @@ sed 's/protections_fetched_at: .*/protections_fetched_at: STAMP/' "$WS/repos.yam
 sed 's/protections_fetched_at: .*/protections_fetched_at: STAMP/' "$WS/repos.yaml" > "$WORK/second.yaml"
 check "a second run changes nothing but the timestamp" "same" \
     "$(cmp -s "$WORK/first.yaml" "$WORK/second.yaml" && echo same || echo differs)"
-check "the block is replaced, never appended" "6" \
+check "the block is replaced, never appended" "8" \
     "$(grep -c '# end generated' "$WS/repos.yaml")"
 
 echo "== --check agrees with what it just wrote"
@@ -243,7 +290,13 @@ drift_case "a corrupted landing"         's/landing: checks/landing: direct/'   
 drift_case "a corrupted required_checks" 's/      - ci-b/      - ci-WRONG/'           alpha
 drift_case "a corrupted code_owner"      's/code_owner: "@owner"/code_owner: none/'   bravo
 drift_case "a corrupted visibility"      '/^  alpha:/,/^$/s/visibility: public/visibility: private/' alpha
-drift_case "a collapsed unavailable"     's/landing: unavailable/landing: direct/'    charlie
+drift_case "a collapsed unavailable"     '/^  charlie:/,/^$/s/landing: unavailable/landing: direct/' charlie
+# The half a careless fix gets wrong: an adjacent entry written once and never
+# compared is recorded, not gated.
+drift_case "a corrupted adjacent landing" '/^  golf:/,/^$/s/landing: checks/landing: direct/' golf
+drift_case "a corrupted adjacent check"   's/      - ci-g/      - ci-WRONG/'                   golf
+drift_case "a collapsed adjacent unavailable" \
+    '/^  hotel:/,/^$/s/landing: unavailable/landing: direct/' hotel
 
 echo "== --check on a repo that was never recorded"
 cp "$WS/repos.yaml" "$WORK/keep.yaml"
@@ -252,6 +305,8 @@ strip_generated "$WS/repos.yaml" > "$WORK/bare.yaml" && cp "$WORK/bare.yaml" "$W
 check "an unrecorded repo is drift" "1" "$?"
 check "and says so rather than comparing nothing" "yes" \
     "$(grep -q 'no generated block recorded' "$WORK/drift2.txt" && echo yes || echo no)"
+check "an unrecorded adjacent entry is drift as well" "yes" \
+    "$(grep -q 'golf: no generated block recorded' "$WORK/drift2.txt" && echo yes || echo no)"
 cp "$WORK/keep.yaml" "$WS/repos.yaml"
 
 echo "== a non-403 failure is an error, not a recorded state"
@@ -268,7 +323,7 @@ rm -f "$STUB/repos_t_alpha_rulesets.fail"
 
 echo "== --emit-json carries the LAB-291 payload"
 "$SUT" --root "$WS" --check --emit-json "$WORK/facts.json" >/dev/null 2>&1
-check "the payload names every repo" "6" \
+check "the payload names every repo" "8" \
     "$(python3 -c "import json;print(len(json.load(open('$WORK/facts.json'))['repos']))")"
 check "the payload carries the landing decision" "checks" \
     "$(python3 -c "
@@ -298,10 +353,21 @@ import json
 d = json.load(open('$WORK/facts.json'))
 print([r for r in d['repos'] if r['name'] == 'charlie'][0]['required_approvals'])")"
 
+check "the payload flags an adjacent entry" "True" \
+    "$(python3 -c "
+import json
+d = json.load(open('$WORK/facts.json'))
+print([r for r in d['repos'] if r['name'] == 'golf'][0]['adjacent'])")"
+check "and flags a member entry as not adjacent" "False" \
+    "$(python3 -c "
+import json
+d = json.load(open('$WORK/facts.json'))
+print([r for r in d['repos'] if r['name'] == 'alpha'][0]['adjacent'])")"
+
 echo "== --emit-json - puts the payload on stdout and nothing else"
 "$SUT" --root "$WS" --check --emit-json - > "$WORK/stdout.json" 2> "$WORK/stdout.err"
 check "--emit-json - exits 0" "0" "$?"
-check "stdout parses as JSON with every repo" "6" \
+check "stdout parses as JSON with every repo" "8" \
     "$(python3 -c "import json;print(len(json.load(open('$WORK/stdout.json'))['repos']))" 2>/dev/null || echo "NOT-JSON")"
 check "the per-repo table moved to stderr" "yes" \
     "$(grep -q '^alpha ' "$WORK/stdout.err" && echo yes || echo no)"
@@ -358,7 +424,7 @@ WORKSPACE_STATE_BIN="$WORK/fake-ws" "$SUT" --root "$WS" --store >"$WORK/store.ou
 check "--store exits 0 when the CLI does" "0" "$?"
 check "it called protections set --file PATH exactly once" "1" \
     "$(grep -c '^protections set --file /' "$WS_STUB_LOG")"
-check "the CLI received every repo" "6" \
+check "the CLI received every repo" "8" \
     "$(python3 -c "import json;print(len(json.load(open('$WS_STUB_PAYLOAD'))['repos']))" 2>/dev/null || echo "NOT-JSON")"
 check "the payload it received carries required_approvals" "1" \
     "$(python3 -c "
@@ -388,6 +454,50 @@ check "a plain write exits 0" "0" "$?"
 check "the CLI was not called" "0" "$(wc -l < "$WS_STUB_LOG" | tr -d ' ')"
 check "and the note names the flag that would have written it" "yes" \
     "$(grep -q 'state store: not written (pass --store)' "$WORK/nostore.out" && echo yes || echo no)"
+
+echo "== a manifest with no adjacent_repos key, and one with an empty key"
+NOADJ="$WORK/noadj"
+mkdir -p "$NOADJ"
+python3 - "$WORK/original.yaml" "$NOADJ/repos.yaml" <<'PY'
+import sys
+text = open(sys.argv[1]).read()
+head, _, tail = text.partition("adjacent_repos:")
+open(sys.argv[2], "w").write(head + "# A trailing comment" + tail.split("# A trailing comment", 1)[1])
+PY
+"$SUT" --root "$NOADJ" > "$WORK/noadj.txt" 2>&1
+check "a manifest without the key still writes" "0" "$?"
+check "and reports no adjacent entries" "yes" \
+    "$(grep -q '(6 repos, 0 adjacent)' "$WORK/noadj.txt" && echo yes || echo no)"
+"$SUT" --root "$NOADJ" --check >/dev/null 2>&1
+check "and --check agrees with it" "0" "$?"
+
+EMPTY="$WORK/empty"
+mkdir -p "$EMPTY"
+sed 's/^adjacent_repos:$/adjacent_repos:/' "$WORK/original.yaml" \
+    | python3 -c "
+import re, sys
+text = sys.stdin.read()
+start = text.index('adjacent_repos:')
+end = text.index('# A trailing comment')
+sys.stdout.write(text[:start] + 'adjacent_repos:\n\n' + text[end:])
+" > "$EMPTY/repos.yaml"
+"$SUT" --root "$EMPTY" > "$WORK/empty.txt" 2>&1
+check "an empty adjacent_repos: key is not an error" "0" "$?"
+check "and contributes no entries" "yes" \
+    "$(grep -q '(6 repos, 0 adjacent)' "$WORK/empty.txt" && echo yes || echo no)"
+
+echo "== a name under both keys is refused, never merged"
+DUP="$WORK/dup"
+mkdir -p "$DUP"
+python3 - "$WORK/original.yaml" "$DUP/repos.yaml" <<'PY'
+import sys
+text = open(sys.argv[1]).read()
+open(sys.argv[2], "w").write(text.replace("  golf:\n", "  alpha:\n", 1))
+PY
+"$SUT" --root "$DUP" > "$WORK/dup.txt" 2>&1
+check "the duplicate exits 1" "1" "$?"
+check "and names the key that clashes" "yes" \
+    "$(grep -q 'named under both repos: and adjacent_repos:: alpha' "$WORK/dup.txt" && echo yes || echo no)"
 
 echo
 echo "protections-selftest: $PASS passed, $FAIL failed"
