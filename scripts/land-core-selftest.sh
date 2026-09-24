@@ -367,7 +367,22 @@ D=$(wt_with_closing_state)
 run --repo "$D/repo" --branch feature --allow-untracked "$CS"
 check "the allowed untracked file lands" 0 "$RC"
 check "the allowed landing reaches origin" "work" "$(fixture_git "$D/origin.git" show main:work.txt 2>/dev/null)"
-check "the allowed file is left in place" "state" "$(cat "$D/feature-wt/$CS" 2>/dev/null)"
+check "the allowed landing removes the branch worktree" 0 "$(fixture_git "$D/repo" worktree list --porcelain 2>/dev/null | grep -c '/feature-wt$')"
+[ -e "$D/feature-wt" ] && nope "the allowed file goes with the worktree" "$D/feature-wt still exists" || ok "the allowed file goes with the worktree"
+fixture_git "$D/repo" rev-parse --verify -q refs/heads/feature >/dev/null 2>&1 && nope "the allowed landing deletes the local branch" "feature still exists" || ok "the allowed landing deletes the local branch"
+lacks "the allowed landing warns about neither cleanup" "left in place" "$OUT"
+
+# A path with a space and a non-ASCII byte: `git status --porcelain` quotes
+# both, so a raw line compare never matches what the caller typed.
+SP="notes/closing état.md"
+D=$(newrepo)
+fixture_git "$D/repo" worktree add -q "$D/feature-wt" feature >/dev/null 2>&1
+mkdir -p "$D/feature-wt/notes"
+echo state > "$D/feature-wt/$SP"
+run --repo "$D/repo" --branch feature --allow-untracked "$SP"
+check "an allowed path with a space and non-ASCII lands" 0 "$RC"
+check "and reaches origin" "work" "$(fixture_git "$D/origin.git" show main:work.txt 2>/dev/null)"
+[ -e "$D/feature-wt" ] && nope "and its worktree is removed" "$D/feature-wt still exists" || ok "and its worktree is removed"
 
 D=$(wt_with_closing_state)
 run --repo "$D/repo" --branch feature --allow-untracked "./$CS"

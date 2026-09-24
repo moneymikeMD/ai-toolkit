@@ -89,6 +89,8 @@ git_quiet clone "$TMP/remotes/delta.git" "$WORK/adjacent-two"
 
 echo "== usage and arguments"
 "$WS" --help >/dev/null 2>&1; check "--help exits 0" "$?" "0"
+check "--help ends with the exit-codes line, not the script body" \
+    "$("$WS" --help 2>&1 | tail -n 1)" "Exit codes: 0 all good; 1 a repo-level operation failed; 2 usage or setup."
 set +e
 "$WS" bogus-verb >/dev/null 2>&1; check "unknown verb exits 2" "$?" "2"
 "$WS" foreach --root "$WORK" >/dev/null 2>&1; check "foreach with no command exits 2" "$?" "2"
