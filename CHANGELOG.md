@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.1](https://github.com/moneymikeMD/ai-toolkit/compare/v1.8.0...v1.8.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* NWM-179 release-publish.sh reads the manifest from the named repo and compares a component PR against its own key ([#62](https://github.com/moneymikeMD/ai-toolkit/issues/62)) ([8312209](https://github.com/moneymikeMD/ai-toolkit/commit/831220906d0f928e003eaebee51ee988ec85cbfe))
+
 ## [1.8.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.7.0...v1.8.0) (2026-09-24)
 
 
