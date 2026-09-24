@@ -63,9 +63,10 @@ cuts one.
 
 Consuming repos generally do not automate this in their own CI. An operator
 cuts their releases by running `scripts/release-publish.sh
-<major|minor|patch>` from *inside* that checkout (it reads
-`./.release-please-manifest.json` in the cwd), which merges the release PR via
-`pr-land.sh`, waits on CI, then moves the tag via `tag-major.sh`.
+<major|minor|patch> --repo OWNER/REPO` from any directory (it reads the
+manifest from the named repo's default branch), which merges the release PR
+via `pr-land.sh`, waits on CI, then moves the tag via `tag-major.sh`. A
+component PR is compared against its own manifest key and moves no tag.
 `tag-major.sh` refuses to move any name matching `vX.Y.Z` — only the floating
 major — and moves it through the GitHub Git Data API with a read-back check,
 because a push's exit code does not prove a tag moved.
