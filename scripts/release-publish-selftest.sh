@@ -74,7 +74,7 @@ if [ "$1" = "pr" ] && [ "$2" = "merge" ]; then
 fi
 
 if [ "$1" = "release" ] && [ "$2" = "view" ]; then
-    echo "release-view" >> "$RELPUB_STUB_RELVIEW_LOG"
+    echo "$3" >> "$RELPUB_STUB_RELVIEW_LOG"
     n2=$(cat "$RELPUB_STUB_RELVIEW_LOG" | wc -l | tr -d ' ')
     [ "$n2" -ge "${RELPUB_STUB_RELEASE_OK_AFTER:-1}" ] && [ "$RELPUB_STUB_RELEASE_EVER_OK" = "true" ] && exit 0
     exit 1
@@ -95,7 +95,18 @@ if [ "$1" = "api" ]; then
         esac
     done
     endpoint="${args[0]:-}"
+    echo "$endpoint" >> "$RELPUB_STUB_API_LOG"
     case "$endpoint" in
+        repos/*/contents/.release-please-manifest.json*|repos/*/contents/release-please-config.json*)
+            case "$endpoint" in
+                *manifest*) raw="$RELPUB_STUB_MANIFEST_JSON" ;;
+                *)          raw="$RELPUB_STUB_CONFIG_JSON" ;;
+            esac
+            # The real endpoint wraps base64 at 60 columns; so does this.
+            body="$(printf '{"content":"%s"}' "$(printf '%s' "$raw" | base64 | tr -d '\n' | fold -w 60 | sed 's/$/\\n/' | tr -d '\n')")"
+            if [ -n "$jqfilter" ]; then printf '%s' "$body" | jq -r "$jqfilter"; else printf '%s\n' "$body"; fi
+            exit 0
+            ;;
         repos/*/rules/branches/*)
             printf '%s\n' "$PRLAND_STUB_REQUIRED"
             exit 0
@@ -126,6 +137,11 @@ if [ "$1" = "api" ]; then
             echo true > "$TAGMAJ_STUB_EXISTS_FILE"
             exit 0
             ;;
+        repos/*/*)
+            body="$(printf '{"default_branch":"%s"}' "$RELPUB_STUB_DEFAULT_BRANCH")"
+            if [ -n "$jqfilter" ]; then printf '%s' "$body" | jq -r "$jqfilter"; else printf '%s\n' "$body"; fi
+            exit 0
+            ;;
     esac
     echo "fake gh: unhandled api call: ${args[*]}" >&2
     exit 1
@@ -137,13 +153,20 @@ STUB
     chmod +x "$WORK/bin/gh"
 }
 
-# reset_scenario — a green minor-release baseline: manifest 1.3.0, one open
-# release-please PR computing 1.4.0, checks green, release present, v1
-# already floating. Each test overrides only what it cares about.
+# reset_scenario — a green minor-release baseline: remote manifest 1.3.0,
+# one open release-please PR computing 1.4.0, checks green, release present,
+# v1 floating. The cwd's manifest says 9.9.9 so a cwd read cannot pass by
+# coincidence. Each test overrides only what it cares about.
 reset_scenario() {
     REPO_DIR="$WORK/repo"
     mkdir -p "$REPO_DIR"
-    echo '{".": "1.3.0"}' > "$REPO_DIR/.release-please-manifest.json"
+    echo '{".": "9.9.9"}' > "$REPO_DIR/.release-please-manifest.json"
+
+    RELPUB_STUB_DEFAULT_BRANCH="main"
+    RELPUB_STUB_MANIFEST_JSON=$(printf '%s' '{".": "1.3.0"}')
+    RELPUB_STUB_CONFIG_JSON=$(printf '%s' '{"packages": {".": {"release-type": "simple"}}}')
+    RELPUB_STUB_API_LOG="$WORK/api.log"
+    : > "$RELPUB_STUB_API_LOG"
 
     RELPUB_STUB_COUNTFILE="$WORK/count"
     RELPUB_STUB_PRLIST_LOG="$WORK/prlist.log"
@@ -179,7 +202,9 @@ reset_scenario() {
     TAGMAJ_STUB_TAGS_JSON=$'v1.3.0\tdeadbeef\nv1.4.0\tdeadbeef'
     TAGMAJ_STUB_REF_SHA="deadbeef"
 
-    export RELPUB_STUB_COUNTFILE RELPUB_STUB_PRLIST_LOG RELPUB_STUB_RELVIEW_LOG \
+    export RELPUB_STUB_DEFAULT_BRANCH RELPUB_STUB_MANIFEST_JSON RELPUB_STUB_CONFIG_JSON \
+        RELPUB_STUB_API_LOG \
+        RELPUB_STUB_COUNTFILE RELPUB_STUB_PRLIST_LOG RELPUB_STUB_RELVIEW_LOG \
         RELPUB_STUB_REPO_NAMEWITHOWNER RELPUB_STUB_PR_LIST_JSON RELPUB_STUB_PR_VIEW_TSV \
         RELPUB_STUB_MERGE_STATE RELPUB_STUB_MERGE_SHA RELPUB_STUB_CHECKRUNS \
         RELPUB_STUB_RELEASE_EVER_OK RELPUB_STUB_RELEASE_OK_AFTER \
@@ -216,9 +241,82 @@ gh_calls="$(cat "$RELPUB_STUB_COUNTFILE" 2>/dev/null)"
 check "major without --i-am-the-owner: touches no gh call" 0 "${gh_calls:-0}"
 check "major without --i-am-the-owner: message names the flag" 1 "$(grep -c -- '--i-am-the-owner' "$WORK/stderr")"
 
+# The manifest is the named repo's, read on its default branch, never the
+# cwd's: the cwd says 9.9.9 (above) and is ignored; a cwd with no manifest
+# at all is fine; and the read names the default branch gh reported.
+reset_scenario
+rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --dry-run)"
+check "manifest from the named repo: the cwd's 9.9.9 is not compared" 0 "$rc"
+check "manifest from the named repo: reports the remote version" 1 "$(grep -c '1.3.0 -> 1.4.0' "$WORK/stdout")"
+reset_scenario
+RELPUB_STUB_MANIFEST_JSON=$(printf '%s' '{".": "1.9.0"}')
+export RELPUB_STUB_MANIFEST_JSON
+rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --dry-run)"
+check "manifest from the named repo: a remote 1.9.0 refuses a 1.4.0 PR" 1 "$rc"
+check "manifest from the named repo: names the remote version" 1 "$(grep -c "manifest's (1.9.0)" "$WORK/stderr")"
+reset_scenario
+rm "$REPO_DIR/.release-please-manifest.json"
+rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --dry-run)"
+check "no manifest in the cwd: still decides" 0 "$rc"
+reset_scenario
+RELPUB_STUB_DEFAULT_BRANCH="trunk"
+export RELPUB_STUB_DEFAULT_BRANCH
+rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --dry-run)"
+check "the manifest is read at the repo's default branch" 1 "$(grep -c 'release-please-manifest.json?ref=trunk' "$RELPUB_STUB_API_LOG")"
+
+# A component PR compares against the component's own manifest key, waits
+# for the component's tag, and leaves the root's floating major alone.
+reset_scenario
+RELPUB_STUB_MANIFEST_JSON=$(printf '%s' '{".": "1.7.0", "plugins/work-order-jira": "0.5.1"}')
+RELPUB_STUB_CONFIG_JSON=$(printf '%s' '{"packages": {".": {"release-type": "simple"}, "plugins/work-order-jira": {"release-type": "simple", "component": "work-order-jira", "tag-separator": "--"}}}')
+RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--work-order-jira\tchore(main): release work-order-jira 0.6.0\ttrue'
+export RELPUB_STUB_MANIFEST_JSON RELPUB_STUB_CONFIG_JSON RELPUB_STUB_PR_VIEW_TSV
+rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --pr 54 --wait-timeout-s 5)"
+check "component PR: compares against the component's manifest key" 0 "$rc"
+check "component PR: reports the component's versions" 1 "$(grep -c "0.5.1 -> 0.6.0) for 'plugins/work-order-jira'" "$WORK/stdout")"
+check "component PR: waits for the component's tag with its separator" "work-order-jira--v0.6.0" "$(head -n1 "$RELPUB_STUB_RELVIEW_LOG")"
+check "component PR: merges once" 1 "$(merge_calls)"
+check "component PR: does not move the root's floating major" 0 "$(tagwrite_calls)"
+
+# A package with no tag-separator waits for release-please's default, "-".
+reset_scenario
+RELPUB_STUB_MANIFEST_JSON=$(printf '%s' '{".": "1.7.0", "plugins/tool": "2.0.0"}')
+RELPUB_STUB_CONFIG_JSON=$(printf '%s' '{"packages": {".": {}, "plugins/tool": {"release-type": "simple"}}}')
+RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--tool\tchore(main): release tool 2.1.0\ttrue'
+export RELPUB_STUB_MANIFEST_JSON RELPUB_STUB_CONFIG_JSON RELPUB_STUB_PR_VIEW_TSV
+rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --pr 56 --wait-timeout-s 5)"
+check "component without tag-separator: resolves by path basename" 0 "$rc"
+check "component without tag-separator: waits for the '-' tag" "tool-v2.1.0" "$(head -n1 "$RELPUB_STUB_RELVIEW_LOG")"
+
+# Two packages naming one component is an ambiguity, refused like two PRs.
+reset_scenario
+RELPUB_STUB_CONFIG_JSON=$(printf '%s' '{"packages": {"a/tool": {"component": "tool"}, "b/tool": {}}}')
+RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--tool\tchore(main): release tool 2.1.0\ttrue'
+export RELPUB_STUB_CONFIG_JSON RELPUB_STUB_PR_VIEW_TSV
+rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --pr 57 --dry-run)"
+check "ambiguous component: exits 1" 1 "$rc"
+check "ambiguous component: lists both packages" 2 "$(grep -cE '^  (a|b)/tool$' "$WORK/stderr")"
+
+# A head that ends at --components-- is malformed, not a root release.
+reset_scenario
+RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--\tchore(main): release 1.4.0\ttrue'
+export RELPUB_STUB_PR_VIEW_TSV
+rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --pr 58 --dry-run)"
+check "empty component name: exits 1" 1 "$rc"
+check "empty component name: says so" 1 "$(grep -c 'empty component' "$WORK/stderr")"
+
+# A component the config does not name is refused, not compared to the root.
+reset_scenario
+RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--ghost\tchore(main): release ghost 0.6.0\ttrue'
+export RELPUB_STUB_PR_VIEW_TSV
+rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --pr 55 --dry-run)"
+check "unknown component: exits 1" 1 "$rc"
+check "unknown component: names it" 1 "$(grep -c "no package for component 'ghost'" "$WORK/stderr")"
+
 # Major WITH --i-am-the-owner, computed as major: proceeds to completion.
 reset_scenario
-echo '{".": "1.9.5"}' > "$REPO_DIR/.release-please-manifest.json"
+RELPUB_STUB_MANIFEST_JSON=$(printf '%s' '{".": "1.9.5"}')
+export RELPUB_STUB_MANIFEST_JSON
 RELPUB_STUB_PR_LIST_JSON=$'51\trelease-please--branches--main\tchore(main): release 2.0.0'
 export RELPUB_STUB_PR_LIST_JSON
 TAGMAJ_STUB_TAGS_JSON=$'v1.9.5\tdeadbeef\nv2.0.0\tdeadbeef'

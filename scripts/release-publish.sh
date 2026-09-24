@@ -30,8 +30,14 @@
 #   --wait-timeout-s N  seconds to wait for CI and the release (default 1800).
 #   --dry-run           decide and print; merge, wait and tag nothing.
 #
-# Reads the current version from ./.release-please-manifest.json in the
-# cwd, so this runs from inside the target repo's own checkout.
+# Reads the current version from the target repo's own
+# .release-please-manifest.json on its default branch, through the GitHub
+# contents API, so the cwd is never an input and this runs from anywhere.
+# A component PR (head release-please--branches--<base>--components--<name>)
+# is compared against the manifest key release-please-config.json maps
+# that component to, waits for the release tagged <name><sep>v<version>
+# with the package's tag-separator, and moves no floating major tag: that
+# tag belongs to the root package.
 #
 # Requires: gh, authenticated for the target repo; pr-land.sh and
 # tag-major.sh next to this script.
@@ -49,7 +55,21 @@ OWNER_OK=0
 WAIT_TIMEOUT_S=1800
 DRY_RUN=0
 
-usage() { sed -n '3,31p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,37p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# repo_json PATH FILTER VARNAME — read the JSON file PATH on the target
+# repo's default branch through the contents API, decode it, apply the jq
+# FILTER to it and assign the result into VARNAME. Non-zero, with gh's
+# message on stderr, when the repo or the file cannot be read.
+repo_json() {
+    local _rj_out
+    _rj_out="$(gh api "repos/$REPO/contents/$1?ref=$DEFAULT_BRANCH" \
+        --jq ".content | gsub(\"\\n\";\"\") | @base64d | fromjson | $2" 2>&1)" || {
+        printf '%s\n' "$_rj_out" >&2
+        return 1
+    }
+    printf -v "$3" '%s' "$_rj_out"
+}
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -148,14 +168,8 @@ if [ -z "$REPO" ]; then
     }
 fi
 
-MANIFEST=".release-please-manifest.json"
-[ -f "$MANIFEST" ] || {
-    echo "release-publish.sh: $MANIFEST not found in the current directory — run this from the repo's checkout" >&2
-    exit 1
-}
-old_version="$(grep -oE '[0-9]+\.[0-9]+\.[0-9]+' "$MANIFEST" | head -n1)"
-[ -n "$old_version" ] || {
-    echo "release-publish.sh: could not find a version in $MANIFEST" >&2
+DEFAULT_BRANCH="$(gh api "repos/$REPO" --jq .default_branch 2>&1)" || {
+    echo "release-publish.sh: could not read the default branch of $REPO: $DEFAULT_BRANCH" >&2
     exit 1
 }
 
@@ -176,6 +190,7 @@ if [ -z "$PR" ]; then
         exit 1
     fi
     PR="$(printf '%s' "$candidates" | cut -f1)"
+    pr_head="$(printf '%s' "$candidates" | cut -f2)"
     pr_title="$(printf '%s' "$candidates" | cut -f3)"
 else
     pr_line="$(gh pr view "$PR" --repo "$REPO" --json state,headRefName,title,author \
@@ -192,6 +207,64 @@ else
         exit 1
     fi
 fi
+
+# The manifest key is the package path: "." for the root, or the path
+# release-please-config.json maps the branch's component name to.
+COMPONENT=""
+case "$pr_head" in
+    *--components--)
+        echo "release-publish.sh: refusing PR #$PR — its head '$pr_head' names an empty component" >&2
+        exit 1
+        ;;
+    *--components--*) COMPONENT="${pr_head##*--components--}" ;;
+esac
+MANIFEST_KEY="."
+TAG_SEP="-"
+if [ -n "$COMPONENT" ]; then
+    case "$COMPONENT" in
+        *[!A-Za-z0-9_.-]*)
+            echo "release-publish.sh: refusing component name '$COMPONENT' from PR #$PR's head branch" >&2
+            exit 1
+            ;;
+    esac
+    pkg_line=""
+    repo_json release-please-config.json \
+        ".packages | to_entries[] | select((.value.component // (.key | split(\"/\") | last)) == \"$COMPONENT\") | \"\\(.key)\\t\\(.value[\"tag-separator\"] // \"-\")\"" \
+        pkg_line || {
+        echo "release-publish.sh: could not read release-please-config.json from $REPO@$DEFAULT_BRANCH to resolve component '$COMPONENT'" >&2
+        exit 1
+    }
+    [ -n "$pkg_line" ] || {
+        echo "release-publish.sh: release-please-config.json in $REPO names no package for component '$COMPONENT' (from PR #$PR's head $pr_head)" >&2
+        exit 1
+    }
+    [ "$(printf '%s\n' "$pkg_line" | grep -c .)" -eq 1 ] || {
+        echo "release-publish.sh: refusing — release-please-config.json in $REPO maps more than one package to component '$COMPONENT':" >&2
+        printf '%s\n' "$pkg_line" | cut -f1 | sed 's/^/  /' >&2
+        exit 1
+    }
+    MANIFEST_KEY="$(printf '%s' "$pkg_line" | head -n1 | cut -f1)"
+    TAG_SEP="$(printf '%s' "$pkg_line" | head -n1 | cut -f2)"
+    case "$MANIFEST_KEY" in
+        *[!A-Za-z0-9_./-]*|"")
+            echo "release-publish.sh: refusing package path '$MANIFEST_KEY' for component '$COMPONENT'" >&2
+            exit 1
+            ;;
+    esac
+fi
+
+old_version=""
+repo_json .release-please-manifest.json ".[\"$MANIFEST_KEY\"] // \"\"" old_version || {
+    echo "release-publish.sh: could not read .release-please-manifest.json from $REPO@$DEFAULT_BRANCH" >&2
+    exit 1
+}
+case "$old_version" in
+    [0-9]*.[0-9]*.[0-9]*) ;;
+    *)
+        echo "release-publish.sh: no version for '$MANIFEST_KEY' in $REPO's .release-please-manifest.json (got '$old_version')" >&2
+        exit 1
+        ;;
+esac
 
 new_version="$(printf '%s' "$pr_title" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
 [ -n "$new_version" ] || {
@@ -219,7 +292,10 @@ if [ "$computed" != "$LEVEL" ]; then
     exit 1
 fi
 
-echo "release-publish.sh: PR #$PR computes to $computed ($old_version -> $new_version) in $REPO — matches requested $LEVEL"
+RELEASE_TAG="v$new_version"
+[ -z "$COMPONENT" ] || RELEASE_TAG="${COMPONENT}${TAG_SEP}v$new_version"
+
+echo "release-publish.sh: PR #$PR computes to $computed ($old_version -> $new_version) for '$MANIFEST_KEY' in $REPO — matches requested $LEVEL"
 
 if [ "$DRY_RUN" -eq 1 ]; then
     echo "release-publish.sh: --dry-run — not merging, not waiting, not tagging"
@@ -266,25 +342,30 @@ if [ "$ci_ok" -ne 1 ]; then
 fi
 echo "release-publish.sh: main CI green on $merge_sha"
 
-echo "release-publish.sh: waiting for release v$new_version"
+echo "release-publish.sh: waiting for release $RELEASE_TAG"
 deadline=$(( $(date +%s) + WAIT_TIMEOUT_S ))
 release_ok=0
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    if gh release view "v$new_version" --repo "$REPO" --json tagName >/dev/null 2>&1; then
+    if gh release view "$RELEASE_TAG" --repo "$REPO" --json tagName >/dev/null 2>&1; then
         release_ok=1
         break
     fi
     sleep 3
 done
 if [ "$release_ok" -ne 1 ]; then
-    echo "release-publish.sh: timed out waiting for release v$new_version to appear" >&2
+    echo "release-publish.sh: timed out waiting for release $RELEASE_TAG to appear" >&2
     exit 1
 fi
-echo "release-publish.sh: release v$new_version confirmed"
+echo "release-publish.sh: release $RELEASE_TAG confirmed"
+
+if [ -n "$COMPONENT" ]; then
+    echo "release-publish.sh: published $LEVEL release $RELEASE_TAG in $REPO; the floating major tag belongs to the root package and was not moved"
+    exit 0
+fi
 
 if ! "$TAG_MAJOR" --repo "$REPO"; then
     echo "release-publish.sh: tag-major.sh failed to move the floating major tag" >&2
     exit 1
 fi
 
-echo "release-publish.sh: published $LEVEL release v$new_version in $REPO and moved the floating major tag"
+echo "release-publish.sh: published $LEVEL release $RELEASE_TAG in $REPO and moved the floating major tag"

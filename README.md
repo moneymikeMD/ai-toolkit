@@ -565,8 +565,13 @@ scripts/release-publish.sh major --i-am-the-owner
 scripts/release-publish.sh minor --dry-run
 ```
 
-Run from inside the target repo's checkout — it reads
-`.release-please-manifest.json` there to know the current version.
+It reads `.release-please-manifest.json` from the named repository's
+default branch through the GitHub contents API, so it runs from any
+directory and the cwd is never an input. A component PR (head
+`release-please--branches--<base>--components--<name>`) is compared against
+the manifest key `release-please-config.json` maps that component to, waits
+for the `<name><separator>v<version>` release, and moves no floating major
+tag, which belongs to the root package.
 
 **A major release is refused without `--i-am-the-owner`.** Majors remain
 the owner's call; that boundary is enforced in code, not left as a
