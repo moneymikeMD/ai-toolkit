@@ -34,7 +34,7 @@ DRY_RUN=0
 
 die_usage() { echo "workspace.sh: $1" >&2; exit 2; }
 die() { echo "workspace.sh: $1" >&2; exit 1; }
-usage() { sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'; }
 
 [ $# -ge 1 ] || { usage; exit 2; }
 

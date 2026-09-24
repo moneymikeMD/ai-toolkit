@@ -49,7 +49,10 @@
 #
 # --allow-untracked PATH (repeatable) exempts one untracked file, relative to
 # the branch worktree's root, from that worktree's dirty check. Only an exact
-# `?? PATH` status line is ignored; the same path modified or staged still stops.
+# untracked entry is ignored; the same path modified or staged still stops.
+# Paths are compared from `git status -z`, so a space or non-ASCII byte in the
+# path matches as typed. When an allowed file was the only thing there, step 8
+# removes the worktree with --force, so the file goes with it.
 #
 # --dry-run calls NO hook and runs no mutating command, including creating
 # the integration worktree. A consumer prints its own plan around this one.
@@ -229,16 +232,33 @@ BRANCH_WT=$(printf '%s\n' "$WT_PORCELAIN" | awk -v b="refs/heads/$BRANCH" '
     /^worktree / { path=$0; sub(/^worktree /,"",path) }
     /^branch /   { br=$0; sub(/^branch /,"",br); if (br==b) print path }
 ')
+WT_ONLY_ALLOWED=0
+WT_RM_FORCE=""
 if [ -n "$BRANCH_WT" ]; then
-    # -uall, so a file in an untracked directory is listed by itself rather
-    # than collapsed into `?? dir/`, which no allowed path could match.
-    if ! WT_STATUS=$(git -C "$BRANCH_WT" status --porcelain --untracked-files=all 2>&1); then
-        stop2 "could not check worktree '$BRANCH_WT' for branch '$BRANCH' (removed or corrupt worktree?): $WT_STATUS"
-    fi
-    for allowed in ${ALLOW_UNTRACKED[@]+"${ALLOW_UNTRACKED[@]}"}; do
-        WT_STATUS=$(printf '%s\n' "$WT_STATUS" | grep -vxF -- "?? $allowed" || true)
-    done
-    [ -z "$WT_STATUS" ] || stop2 "branch '$BRANCH' worktree at '$BRANCH_WT' has uncommitted changes — commit or stash them first"
+    # -z, so a path with a space or non-ASCII byte arrives unquoted; -uall, so
+    # a file in an untracked directory is listed by itself rather than
+    # collapsed into `?? dir/`, which no allowed path could match. Process
+    # substitution loses git's exit status, so it travels as a final record.
+    WT_DIRTY=""
+    WT_RC=""
+    while IFS= read -r -d '' entry; do
+        case "$entry" in
+            "") continue ;;
+            "land-core-status-rc="*) WT_RC="${entry#land-core-status-rc=}"; continue ;;
+            "?? "*)
+                for allowed in ${ALLOW_UNTRACKED[@]+"${ALLOW_UNTRACKED[@]}"}; do
+                    if [ "${entry#\?\? }" = "$allowed" ]; then
+                        WT_ONLY_ALLOWED=1
+                        continue 2
+                    fi
+                done ;;
+        esac
+        WT_DIRTY="${WT_DIRTY}${entry}
+"
+    done < <(rc=0; git -C "$BRANCH_WT" status --porcelain -z --untracked-files=all 2>&1 || rc=$?; printf '\0land-core-status-rc=%s\0' "$rc")
+    [ "$WT_RC" = 0 ] || stop2 "could not check worktree '$BRANCH_WT' for branch '$BRANCH' (removed or corrupt worktree?): $WT_DIRTY"
+    [ -z "$WT_DIRTY" ] || stop2 "branch '$BRANCH' worktree at '$BRANCH_WT' has uncommitted changes — commit or stash them first"
+    [ "$WT_ONLY_ALLOWED" = 1 ] && WT_RM_FORCE="--force" || WT_RM_FORCE=""
 fi
 
 MERGE_MSG="$MERGE_MSG_ARG"
@@ -297,7 +317,7 @@ echo "  4. lint on the merged tree: $LINT_PREVIEW"
 echo "  5. hook pre-push${HOOK:+ ($HOOK)}"
 echo "  6. git push origin HEAD:$TARGET_BRANCH (from the integration worktree; '$MAIN_WORKTREE' is not fast-forwarded automatically)"
 echo "  7. hook post-push${HOOK:+ ($HOOK)}"
-WT_PLAN=" git worktree remove $BRANCH_WT, then"
+WT_PLAN=" git worktree remove${WT_RM_FORCE:+ $WT_RM_FORCE} $BRANCH_WT, then"
 [ -n "$BRANCH_WT" ] && [ "$BRANCH_WT" != "$MAIN_WORKTREE" ] || WT_PLAN=""
 echo "  8.$WT_PLAN git branch -d '$BRANCH'"
 [ -n "$HOOK" ] || echo "  (no --hook given — every hook step is a no-op)"
@@ -445,7 +465,9 @@ if [ -n "$BRANCH_WT" ] && [ "$BRANCH_WT" != "$MAIN_WORKTREE" ] && [ -e "$BRANCH_
     case "$(pwd -P)/" in
         "$BRANCH_WT"/*) warn "worktree '$BRANCH_WT' holds branch '$BRANCH' but this script is running inside it — left in place" ;;
         *)
-            if WT_RM=$(git -C "$MAIN_WORKTREE" worktree remove "$BRANCH_WT" 2>&1); then
+            # --force only when the dirty check proved the worktree holds
+            # nothing but allowed files; anything else still refuses here.
+            if WT_RM=$(git -C "$MAIN_WORKTREE" worktree remove ${WT_RM_FORCE:+"$WT_RM_FORCE"} "$BRANCH_WT" 2>&1); then
                 echo "removed worktree '$BRANCH_WT'."
             else
                 warn "could not remove worktree '$BRANCH_WT' — left in place: $WT_RM"
