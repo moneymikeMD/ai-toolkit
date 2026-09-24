@@ -32,7 +32,7 @@ writes Markdown from a heredoc is not commenting.
 ### As a step
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@v7
 - uses: moneymikeMD/ai-toolkit/actions/comment-lint@v1
 ```
 
@@ -73,7 +73,7 @@ volume, an Alloy `__path__`) is silently broken in every other checkout.
 ### As a step
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@v7
 - uses: moneymikeMD/ai-toolkit/actions/no-personal-paths@v1
 ```
 
@@ -325,9 +325,7 @@ that needs it, and it beats a cleverer regex that tries to guess intent.
 
 `report-only` defaults to `"true"`, and every repo starts there. Run it over a
 few waves, read what it names, add the exceptions that are real, and switch the
-gate on per repo afterwards — the graduated path `comment-lint` took when
-roughly 1100 pre-existing violations would have reddened every branch in
-homelab.
+gate on per repo afterwards, the same graduated path `comment-lint` uses.
 
 Two known limits, both deliberate. Only *downward* threshold edits are
 reported: a ceiling that gets raised (`max-warnings 0` → `10`) is the same move
@@ -370,8 +368,8 @@ has its own retry behaviour.
 ## pr-land
 
 Merges a PR, but only after checking the base branch's actual required
-status checks against the actual check-runs on the PR's head SHA — not from
-memory, which has been wrong twice in one hour.
+status checks against the actual check-runs on the PR's head SHA, never from
+memory.
 
 ```bash
 scripts/pr-land.sh 42
@@ -389,7 +387,7 @@ squash merge; anything else — pending, or partially absent on a human PR — i
 refusal.
 
 **`--admin` is derived, never a parameter.** Its two paths are the two cases
-the owner's grant of 2026-09-19 clears. A bot-authored PR (for example, a
+the owner's standing grant clears. A bot-authored PR (for example, a
 release-please PR running on `GITHUB_TOKEN`) triggers a workflow run GitHub
 never actually executes: zero jobs, zero check-runs, and the required contexts
 are permanently *absent* rather than failed. A review-gated repo — the resting
@@ -413,8 +411,7 @@ has returned a denial after the fact — so the read-back is unconditional.
 
 ## verify-run
 
-Runs a ticket's `verify` frontmatter block with the rules a hand-rolled
-runner keeps forgetting built in, instead of remembered.
+Runs a ticket's `verify` frontmatter block with its safety rules built in.
 
 ```bash
 scripts/verify-run.sh path/to/TICKET.md --root ~/code/wt-ticket-repo
@@ -446,10 +443,8 @@ scripts/land-queue.sh 42 --dry-run
 
 **A base whose required contexts cannot be read is not a refusal.** A private
 repo on GitHub Free answers 403 for the call a plan that could show rules
-would answer with an empty list, so there is nothing to wait for — and
-`gh pr checks --required` exits non-zero there with *no required checks
-reported*, which this script used to read as failure and refuse every such
-landing (NWM-162). Both scripts now go through `lib/ghkit.sh`, which returns
+would answer with an empty list, so there is nothing to wait for. Both this
+script and `pr-land.sh` read that fact through `lib/ghkit.sh`, which returns
 three outcomes rather than two: read, not-visible, failed. A rules read that
 failed for any *other* reason still refuses, because that is not evidence
 of an absence.
@@ -500,9 +495,8 @@ lands through PRs wants `pr-land.sh`.
 **`--repo` is mandatory and has no cwd fallback.** Every script here is
 invoked by absolute path from outside the repo it acts on, and this one
 merges, pushes and deletes a branch. A cwd default would silently pick
-whichever repository the caller happened to be standing in — the hazard
-`script-retire.sh` hit as LAB-300, on a path that is destructive in the same
-way. Empty, missing or non-git is an error, never a fallback.
+whichever repository the caller happened to be standing in. Empty, missing or
+non-git is an error, never a fallback.
 
 ### The four-point hook contract
 
@@ -552,10 +546,8 @@ creating the integration worktree. A consumer prints its own plan around
 this one rather than expecting hooks to print theirs mid-run.
 
 **`--lint-cmd` runs through `bash -c`**, so `a && b` is evaluated rather than
-passed to `a` as two literal arguments. night-watchman's `land-branch.sh`
-word-splits it instead, which is filed as a known issue there; the
-consequence worth naming is that `true && false` *passes* under word
-splitting, so a red lint lands. The default, when no command is given, is
+passed to `a` as two literal arguments; under word splitting `true && false`
+*passes*, so a red lint lands. The default, when no command is given, is
 `./scripts/lint.sh` in the merged tree if it is executable, else a warning
 and no gate.
 
@@ -564,8 +556,7 @@ and no gate.
 Publishes a release-please release end to end: checks the open PR against
 the level you asked for, merges it through `pr-land.sh`, waits for the
 resulting release and CI, then repoints the floating major tag through
-`tag-major.sh`. What used to be six manual steps, each individually
-verifiable and none of them written down.
+`tag-major.sh`.
 
 ```bash
 scripts/release-publish.sh minor
@@ -608,8 +599,7 @@ something asks for it — that guard is the reason this script exists.
 **The move goes through the GitHub Git Data API, not a local push**, so
 it needs no checkout at all once `--repo` is known. The ref is read back
 afterward and the script fails unless the read-back SHA matches the
-intended commit — a push reporting success has not always meant the tag
-actually moved.
+intended commit, because a push's exit code does not prove the tag moved.
 
 ## workspace
 
@@ -759,9 +749,6 @@ checkout on a machine without the server simply has no `release` tool.
 The [no-personal-paths](#no-personal-paths) action enforces the rule at the top
 of this file, and this repo runs it on its own CI.
 
-The [no-personal-paths](#no-personal-paths) action enforces the rule at the top
-of this file, and this repo runs it on its own CI.
-
 ## Versioning
 
 Consumers pin a major tag (`@v1`). `release-please` maintains `CHANGELOG.md`
@@ -779,9 +766,8 @@ act, not a rubber stamp. Before merging one:
 - the linter has been run against a heredoc-heavy repository and the output
   read by a person, not just observed to exit zero
 
-That second check exists because every false positive seen so far came from
-a file that writes Markdown or config from a heredoc, and the one false
-negative lived in the same place.
+That second check exists because heredoc-heavy files are where the linter's
+false positives and false negatives live.
 
 ## How this repo is worked
 
@@ -796,14 +782,10 @@ with write access is ever added, revisit it.
 
 Dependabot watches the `github-actions` ecosystem weekly. Patch and minor
 bumps auto-merge once the required checks pass; majors wait for a human.
-There are no package dependencies to watch — `comment-lint.py` is stdlib
-only.
+There is no package manifest to watch: the actions are python3 stdlib only,
+and `workspace.sh` and `protections.sh` need PyYAML at run time.
 
 `CHANGELOG.md` is generated. Do not edit it by hand.
-
-`comment-lint.py` originated in
-[night-watchman](https://github.com/moneymikeMD/night-watchman) and was seeded
-here from `89e64b0`.
 
 ## License
 
