@@ -345,6 +345,63 @@ run --repo "$D/repo" --branch feature
 check "a dirty worktree holding the branch is refused" 2 "$RC"
 
 echo
+echo "== --allow-untracked =="
+
+CS=".night-watchman/closing-state.md"
+# wt_with_closing_state — echo a fixture whose feature worktree holds only an
+# untracked $CS, inside a directory git has never seen.
+wt_with_closing_state() {
+    local d
+    d=$(newrepo)
+    fixture_git "$d/repo" worktree add -q "$d/feature-wt" feature >/dev/null 2>&1
+    mkdir -p "$d/feature-wt/.night-watchman"
+    echo state > "$d/feature-wt/$CS"
+    printf '%s' "$d"
+}
+
+D=$(wt_with_closing_state)
+run --repo "$D/repo" --branch feature
+check "an untracked file alone still refuses without the flag" 2 "$RC"
+
+D=$(wt_with_closing_state)
+run --repo "$D/repo" --branch feature --allow-untracked "$CS"
+check "the allowed untracked file lands" 0 "$RC"
+check "the allowed landing reaches origin" "work" "$(fixture_git "$D/origin.git" show main:work.txt 2>/dev/null)"
+check "the allowed file is left in place" "state" "$(cat "$D/feature-wt/$CS" 2>/dev/null)"
+
+D=$(wt_with_closing_state)
+run --repo "$D/repo" --branch feature --allow-untracked "./$CS"
+check "a leading ./ on the allowed path still matches" 0 "$RC"
+
+D=$(wt_with_closing_state)
+echo other > "$D/feature-wt/other.txt"
+BEFORE="$(origin_main "$D")"
+run --repo "$D/repo" --branch feature --allow-untracked "$CS"
+check "a second untracked file beside the allowed one refuses" 2 "$RC"
+check "that refusal pushed nothing" "$BEFORE" "$(origin_main "$D")"
+
+D=$(wt_with_closing_state)
+echo other > "$D/feature-wt/other.txt"
+run --repo "$D/repo" --branch feature --allow-untracked "$CS" --allow-untracked other.txt
+check "the flag repeats" 0 "$RC"
+
+D=$(wt_with_closing_state)
+fixture_git "$D/feature-wt" add "$CS" >/dev/null 2>&1
+run --repo "$D/repo" --branch feature --allow-untracked "$CS"
+check "the allowed path staged still refuses" 2 "$RC"
+
+D=$(wt_with_closing_state)
+fixture_git "$D/feature-wt" add "$CS" >/dev/null 2>&1
+fixture_git "$D/feature-wt" -c user.email=s@example.invalid -c user.name=s commit -qm "track it" >/dev/null 2>&1
+echo changed > "$D/feature-wt/$CS"
+run --repo "$D/repo" --branch feature --allow-untracked "$CS"
+check "the allowed path tracked and modified still refuses" 2 "$RC"
+
+D=$(newrepo)
+run --repo "$D/repo" --branch feature --allow-untracked ""
+check "an empty --allow-untracked is refused" 2 "$RC"
+
+echo
 echo "== what the move must not carry =="
 
 SRC="$(cat "$SUT")"

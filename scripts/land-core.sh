@@ -9,6 +9,7 @@
 #   land-core.sh --repo PATH --branch NAME
 #                [--target BRANCH] [--label TEXT] [--merge-message MSG]
 #                [--lint-cmd CMD] [--hook PATH] [--reset-land] [--dry-run]
+#                [--allow-untracked PATH]...
 #   land-core.sh --help
 #
 # --repo is MANDATORY and has no cwd fallback. Every other script here is
@@ -45,6 +46,10 @@
 # (the integration worktree), LAND_CORE_BRANCH, LAND_CORE_TARGET,
 # LAND_CORE_LABEL, LAND_CORE_MERGE_SHA (empty before the merge) and
 # LAND_CORE_PUSHED (post-push only: 1 pushed, 0 no remote).
+#
+# --allow-untracked PATH (repeatable) exempts one untracked file, relative to
+# the branch worktree's root, from that worktree's dirty check. Only an exact
+# `?? PATH` status line is ignored; the same path modified or staged still stops.
 #
 # --dry-run calls NO hook and runs no mutating command, including creating
 # the integration worktree. A consumer prints its own plan around this one.
@@ -85,6 +90,7 @@ LABEL=""
 MERGE_MSG_ARG=""
 RESET_LAND=0
 DRY_RUN=0
+ALLOW_UNTRACKED=()
 
 # This script never sets a trap: kit.sh keeps the one EXIT handler, so every
 # controlled exit path releases the lock explicitly instead.
@@ -177,6 +183,9 @@ while [ $# -gt 0 ]; do
         --hook)
             [ $# -ge 2 ] || stop2 "--hook needs a path"
             HOOK="$2"; shift 2 ;;
+        --allow-untracked)
+            [ $# -ge 2 ] && [ -n "$2" ] || stop2 "--allow-untracked needs a path"
+            ALLOW_UNTRACKED+=("${2#./}"); shift 2 ;;
         -*) stop2 "unknown option: $1 (see --help)" ;;
         *)  stop2 "unexpected positional argument '$1' — every input is a flag (see --help)" ;;
     esac
@@ -221,9 +230,14 @@ BRANCH_WT=$(printf '%s\n' "$WT_PORCELAIN" | awk -v b="refs/heads/$BRANCH" '
     /^branch /   { br=$0; sub(/^branch /,"",br); if (br==b) print path }
 ')
 if [ -n "$BRANCH_WT" ]; then
-    if ! WT_STATUS=$(git -C "$BRANCH_WT" status --porcelain 2>&1); then
+    # -uall, so a file in an untracked directory is listed by itself rather
+    # than collapsed into `?? dir/`, which no allowed path could match.
+    if ! WT_STATUS=$(git -C "$BRANCH_WT" status --porcelain --untracked-files=all 2>&1); then
         stop2 "could not check worktree '$BRANCH_WT' for branch '$BRANCH' (removed or corrupt worktree?): $WT_STATUS"
     fi
+    for allowed in ${ALLOW_UNTRACKED[@]+"${ALLOW_UNTRACKED[@]}"}; do
+        WT_STATUS=$(printf '%s\n' "$WT_STATUS" | grep -vxF -- "?? $allowed" || true)
+    done
     [ -z "$WT_STATUS" ] || stop2 "branch '$BRANCH' worktree at '$BRANCH_WT' has uncommitted changes — commit or stash them first"
 fi
 
