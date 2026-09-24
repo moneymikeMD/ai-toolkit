@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.8.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.7.0...v1.8.0) (2026-09-24)
+
+
+### Features
+
+* script-analytics.py carries a sentinel line consumers verify before invoking it (NWM-160) ([#58](https://github.com/moneymikeMD/ai-toolkit/issues/58)) ([db8d66f](https://github.com/moneymikeMD/ai-toolkit/commit/db8d66feb18f3b660461cf38622b882a864dd19b))
+
+
+### Bug Fixes
+
+* NWM-176 land-core.sh removes the worktree an --allow-untracked landing proved clean, and matches allowed paths unquoted ([#61](https://github.com/moneymikeMD/ai-toolkit/issues/61)) ([b22cf5c](https://github.com/moneymikeMD/ai-toolkit/commit/b22cf5c32c1de2f8368dff8f12de10110064d793))
+
 ## [1.7.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.6.0...v1.7.0) (2026-09-24)
 
 
