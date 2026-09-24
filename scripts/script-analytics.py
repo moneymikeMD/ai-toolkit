@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# script-analytics-extractor-sentinel: v1 (consumers grep this line before invoking; keep it)
 """script-analytics.py — quantitative evidence on the script-author /
 script-reviewer lane, extracted from local Claude Code JSONL transcripts.
 

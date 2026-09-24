@@ -37,6 +37,15 @@ FAIL=0
 ok()  { echo "ok - $1"; PASS=$((PASS + 1)); }
 bad() { echo "FAIL - $1"; FAIL=$((FAIL + 1)); }
 
+# ---- NWM-160: the sentinel a consumer greps for before invoking --------
+# night-watchman's script-events-hook.sh refuses to run a resolved
+# script-analytics.py that lacks this line, so removing it darkens the hook.
+if grep -q '^# script-analytics-extractor-sentinel: v1' "$ANALYTICS"; then
+  ok "sentinel line is present for consumers to verify the extractor by"
+else
+  bad "sentinel line missing: script-events-hook.sh would refuse this extractor"
+fi
+
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
