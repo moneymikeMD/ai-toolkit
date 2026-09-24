@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.7.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.6.0...v1.7.0) (2026-09-24)
+
+
+### Features
+
+* NWM-175 land-core.sh --allow-untracked PATH exempts one untracked file from the branch-worktree check ([#57](https://github.com/moneymikeMD/ai-toolkit/issues/57)) ([7f9e456](https://github.com/moneymikeMD/ai-toolkit/commit/7f9e45625bac1e7ea4ef3c004f5414f427a01a9c))
+
+
+### Bug Fixes
+
+* LAB-317 workspace.sh accepts --root and --dry-run before the verb ([#55](https://github.com/moneymikeMD/ai-toolkit/issues/55)) ([daac82e](https://github.com/moneymikeMD/ai-toolkit/commit/daac82e4d7d35b719ba116eac5901c502c1b7ae1))
+
 ## [1.6.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.5.0...v1.6.0) (2026-09-21)
 
 
