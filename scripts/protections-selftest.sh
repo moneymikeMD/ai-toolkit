@@ -486,6 +486,59 @@ check "an empty adjacent_repos: key is not an error" "0" "$?"
 check "and contributes no entries" "yes" \
     "$(grep -q '(6 repos, 0 adjacent)' "$WORK/empty.txt" && echo yes || echo no)"
 
+echo "== LAB-318: the generated block is indented from the entry key, not the last body line"
+stub "repos/t/india"  "$(repo_json public)"
+stub "repos/t/juliet" "$(repo_json public)"
+stub "repos/t/india/rulesets"  '[]'
+stub "repos/t/juliet/rulesets" '[]'
+FOLD="$WORK/fold"
+mkdir -p "$FOLD"
+cat > "$FOLD/repos.yaml" <<'YAML'
+workspace: fixture
+root: /nowhere
+
+repos:
+  india:
+    url: git@github.com:t/india.git
+    branch: main
+    visibility: public
+    agent: false
+    summary: >
+      An entry whose last body line is a folded-scalar continuation,
+      so a block indented from it lands inside the string.
+
+  juliet:
+    url: git@github.com:t/juliet.git
+    branch: main
+    agent: false
+    summary: An entry with no visibility key at all.
+YAML
+cp "$FOLD/repos.yaml" "$WORK/fold-original.yaml"
+"$SUT" --root "$FOLD" > "$WORK/fold.txt" 2>&1
+check "the write exits 0" "0" "$?"
+check "the generated block sits at the entry's key indent" "yes" \
+    "$(sed -n '/^  india:/,/^  juliet:/p' "$FOLD/repos.yaml" | grep -q '^    landing: direct' && echo yes || echo no)"
+check "landing parses as a key of the entry, not as summary text" "direct" \
+    "$(value_of "$FOLD/repos.yaml" india landing)"
+check "the folded summary keeps only its own two lines" "yes" \
+    "$(python3 -c "
+import yaml
+s = yaml.safe_load(open('$FOLD/repos.yaml'))['repos']['india']['summary']
+print('yes' if 'landing' not in s and s.rstrip().endswith('inside the string.') else 'no')")"
+check "a missing visibility key is inserted by a write run" "public" \
+    "$(value_of "$FOLD/repos.yaml" juliet visibility)"
+check "at the entry's key indent" "1" "$(grep -c '^    visibility: public' <(sed -n '/^  juliet:/,$p' "$FOLD/repos.yaml"))"
+"$SUT" --root "$FOLD" --check >/dev/null 2>&1
+check "--check then exits 0" "0" "$?"
+sed 's/protections_fetched_at: .*/protections_fetched_at: STAMP/' "$FOLD/repos.yaml" > "$WORK/fold-first.yaml"
+"$SUT" --root "$FOLD" >/dev/null 2>&1
+sed 's/protections_fetched_at: .*/protections_fetched_at: STAMP/' "$FOLD/repos.yaml" > "$WORK/fold-second.yaml"
+check "a second write run is byte-identical but for the stamp" "same" \
+    "$(cmp -s "$WORK/fold-first.yaml" "$WORK/fold-second.yaml" && echo same || echo differs)"
+strip_generated "$FOLD/repos.yaml" | sed '/^  juliet:/,$ { /^    visibility: public$/d; }' > "$WORK/fold-stripped.yaml"
+check "stripping the generated block and the inserted key reproduces the input" "same" \
+    "$(cmp -s "$WORK/fold-stripped.yaml" "$WORK/fold-original.yaml" && echo same || echo differs)"
+
 echo "== a name under both keys is refused, never merged"
 DUP="$WORK/dup"
 mkdir -p "$DUP"

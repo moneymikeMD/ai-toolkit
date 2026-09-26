@@ -374,11 +374,20 @@ def rewrite(lines, name_to_facts, stamp):
         if not body:
             raise Fatal("repo %s has no keys to append to" % name)
         last = body[-1]
-        indent = " " * (len(block[last]) - len(block[last].lstrip()))
+        # Indented from the entry key, never from the last body line: that
+        # line may be a block-scalar continuation, and a key written at its
+        # indent parses as more of the string.
+        indent = " " * (len(out[start]) - len(out[start].lstrip()) + 2)
+        visibility = "%svisibility: %s" % (indent, facts["visibility"])
+        seen = False
         for i in body:
             if re.match(r"^\s*visibility:", block[i]):
-                block[i] = "%svisibility: %s" % (indent, facts["visibility"])
-        block[last + 1:last + 1] = render(facts, stamp, indent)
+                block[i] = visibility
+                seen = True
+        generated = render(facts, stamp, indent)
+        if not seen:
+            generated.insert(0, visibility)
+        block[last + 1:last + 1] = generated
         out[start + 1:end] = block
     return out
 
