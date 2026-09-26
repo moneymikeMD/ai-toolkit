@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.2](https://github.com/moneymikeMD/ai-toolkit/compare/v1.8.1...v1.8.2) (2026-09-26)
+
+
+### Bug Fixes
+
+* LAB-318 protections.sh indents the generated block from the entry key and inserts a missing visibility key ([#64](https://github.com/moneymikeMD/ai-toolkit/issues/64)) ([d865665](https://github.com/moneymikeMD/ai-toolkit/commit/d865665b1ca344a6ecf14369edde0bc7200b3b27))
+
 ## [1.8.1](https://github.com/moneymikeMD/ai-toolkit/compare/v1.8.0...v1.8.1) (2026-09-24)
 
 
