@@ -387,10 +387,12 @@ squash merge; anything else — pending, or partially absent on a human PR — i
 refusal.
 
 **`--admin` is derived, never a parameter.** Its two paths are the two cases
-the owner's standing grant clears. A bot-authored PR (for example, a
-release-please PR running on `GITHUB_TOKEN`) triggers a workflow run GitHub
-never actually executes: zero jobs, zero check-runs, and the required contexts
-are permanently *absent* rather than failed. A review-gated repo — the resting
+the owner's standing grant clears. A bot-authored PR pushed with the default
+`GITHUB_TOKEN` triggers a workflow run GitHub never actually executes: zero
+jobs, zero check-runs, and the required contexts are permanently *absent*
+rather than failed. This repo's release-please runs on the
+`RELEASE_PLEASE_TOKEN` PAT instead, so its release PRs get real check-runs;
+the absent case returns only when that PAT expires. A review-gated repo — the resting
 state of every repo here, with no second reviewer for the gate to summon —
 reports `REVIEW_REQUIRED` forever. The script reasons its way to both instead
 of a caller asking for either.

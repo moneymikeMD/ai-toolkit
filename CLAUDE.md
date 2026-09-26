@@ -61,6 +61,16 @@ number written in prose. A `major-tag` job in `release-please.yml` re-points
 the floating `v1` onto every release's exact tag the moment release-please
 cuts one.
 
+The release-please step runs on the `RELEASE_PLEASE_TOKEN` repo secret, a
+fine-grained PAT (Contents + Pull requests, read/write), not the default
+`GITHUB_TOKEN`. GitHub never runs workflows on a push made with
+`GITHUB_TOKEN`, so a release PR pushed with it sits with no checks and
+`pr-land.sh` can only reach it through the bot `--admin` path. With the PAT
+the release branch push triggers CI like any other. The PAT expires before
+2027-09-26 (one-year maximum); when it does, release PRs come back with no
+checks, and the fix is to mint a new one and reset the secret, not to
+close-and-reopen the PR each time.
+
 Consuming repos generally do not automate this in their own CI. An operator
 cuts their releases by running `scripts/release-publish.sh
 <major|minor|patch> --repo OWNER/REPO` from any directory (it reads the
