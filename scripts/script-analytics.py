@@ -208,6 +208,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PRICES_BASENAME = "claude-prices.tsv"
 TOKEN_CLASSES = ("input", "output", "cache_write", "cache_read")
 PRICE_COLUMNS = ("model",) + tuple("%s_per_mtok" % c for c in TOKEN_CLASSES)
+CACHE_WRITE_1H_COLUMN = "cache_write_1h_per_mtok"
+PRICE_COLUMNS_1H = (
+    PRICE_COLUMNS[:4] + (CACHE_WRITE_1H_COLUMN,) + PRICE_COLUMNS[4:],
+    PRICE_COLUMNS + (CACHE_WRITE_1H_COLUMN,),
+)
 
 
 class ValidationError(Exception):
@@ -273,19 +278,22 @@ def parse_timestamp(text):
 
 def read_prices(path):
     """Read a price table TSV into {model: {token_class: rate_per_mtok}}.
-    Vendored from claude-cost-scan.py; the header must match exactly."""
+    The header is the 5 known columns, optionally with cache_write_1h_per_mtok
+    appended or after cache_write_per_mtok; any other shape is refused."""
     prices = {}
     with open(path) as f:
         reader = csv.DictReader(f, delimiter="\t")
-        if reader.fieldnames != list(PRICE_COLUMNS):
+        header = tuple(reader.fieldnames or ())
+        if header != PRICE_COLUMNS and header not in PRICE_COLUMNS_1H:
             raise ValidationError(
-                "--prices %s: header must be exactly %s (found %s)"
-                % (path, "\t".join(PRICE_COLUMNS), "\t".join(reader.fieldnames or []))
+                "--prices %s: header must be exactly %s, optionally with %s (found %s)"
+                % (path, "\t".join(PRICE_COLUMNS), CACHE_WRITE_1H_COLUMN, "\t".join(header))
             )
+        classes = TOKEN_CLASSES + (("cache_write_1h",) if CACHE_WRITE_1H_COLUMN in header else ())
         for row in reader:
             model = row["model"]
             try:
-                prices[model] = {c: float(row["%s_per_mtok" % c]) for c in TOKEN_CLASSES}
+                prices[model] = {c: float(row["%s_per_mtok" % c]) for c in classes}
             except ValueError:
                 raise ValidationError("--prices %s: non-numeric rate for model %r" % (path, model))
     return prices
@@ -302,7 +310,13 @@ def turn_cost(turn, prices, warned_models):
             warned_models.add(turn["model"])
         return 0.0
     tokens = turn["tokens"]
-    return sum(tokens[c] / 1_000_000.0 * rate[c] for c in TOKEN_CLASSES)
+    if "cache_write_1h" in rate and tokens.get("cache_write_1h"):
+        one_hour = min(tokens["cache_write_1h"], tokens["cache_write"])
+        tokens = dict(tokens, cache_write=tokens["cache_write"] - one_hour)
+        extra = one_hour / 1_000_000.0 * rate["cache_write_1h"]
+    else:
+        extra = 0.0
+    return extra + sum(tokens[c] / 1_000_000.0 * rate[c] for c in TOKEN_CLASSES)
 
 
 def prices_path_candidates():
@@ -704,7 +718,13 @@ def turn_tokens(usage):
         "output": _num(usage.get("output_tokens")),
         "cache_read": _num(usage.get("cache_read_input_tokens")),
         "cache_write": _num(usage.get("cache_creation_input_tokens")),
+        "cache_write_1h": _num((usage.get("cache_creation") or {}).get("ephemeral_1h_input_tokens")),
     }
+
+
+def token_total(tok):
+    """Billable token count; cache_write_1h is a subset of cache_write."""
+    return sum(tok[c] for c in TOKEN_CLASSES)
 
 
 def sum_turns(folded_turns, prices, warned_models):
@@ -716,7 +736,7 @@ def sum_turns(folded_turns, prices, warned_models):
     model_counts = {}
     for t in folded_turns:
         tok = turn_tokens(t["usage"])
-        total_tokens += sum(tok.values())
+        total_tokens += token_total(tok)
         total_usd += usd_cost(t["model"], tok, prices, warned_models)
         model_counts[t["model"]] = model_counts.get(t["model"], 0) + 1
     model = None
@@ -1039,7 +1059,7 @@ def build_invoke_events(jsonl_path, session_id, agent_id, agent_type, warnings, 
             result_ts = result.get("ts") or call_ts
         call_dur = (result_ts - call_ts).total_seconds() if (call_ts and result_ts) else 0
         tok = turn_tokens(call_turn["usage"])
-        call_tokens = sum(tok.values())
+        call_tokens = token_total(tok)
         call_usd = usd_cost(call_turn["model"], tok, prices, warned_models)
         # cause reused as a selftest marker; a lint-shaped command is already
         # excluded by find_script_invocations, so no "lint" marker is needed.
@@ -1530,7 +1550,7 @@ def process_subagent(slug, session_id, session_path, agent_id, jsonl_path,
                 result_ts = result.get("ts") or call_ts
             call_dur = (result_ts - call_ts).total_seconds() if (call_ts and result_ts) else 0
             tok = turn_tokens(call_turn["usage"])
-            call_tokens = sum(tok.values())
+            call_tokens = token_total(tok)
             call_usd = usd_cost(call_turn["model"], tok, prices, warned_models)
             events.append(make_event(
                 ts=call_ts, script=primary_script, scripts=scripts_sorted,
