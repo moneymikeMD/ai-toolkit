@@ -1536,6 +1536,50 @@ else
   bad "workflows: the nested agent's meta.json was not found beside its transcript"
 fi
 
+# --- NWM-189: optional cache_write_1h_per_mtok price column. ---------------
+ONEH_OUT="$(ANALYTICS="$ANALYTICS" WORK="$WORK" python3 - <<'PYEOF'
+import importlib.util, os, sys, json
+spec = importlib.util.spec_from_file_location("sa", os.environ["ANALYTICS"])
+sa = importlib.util.module_from_spec(spec); spec.loader.exec_module(sa)
+work = os.environ["WORK"]
+H5 = "model\tinput_per_mtok\toutput_per_mtok\tcache_write_per_mtok\tcache_read_per_mtok"
+H6_END = H5 + "\tcache_write_1h_per_mtok"
+H6_MID = "model\tinput_per_mtok\toutput_per_mtok\tcache_write_per_mtok\tcache_write_1h_per_mtok\tcache_read_per_mtok"
+def table(name, header, row):
+    path = os.path.join(work, name)
+    open(path, "w").write(header + "\n" + row + "\n")
+    return path
+out = []
+p5 = sa.read_prices(table("p5.tsv", H5, "m\t1\t2\t3\t4"))
+out.append("5col_no_1h_key=%s" % ("cache_write_1h" not in p5["m"]))
+pe = sa.read_prices(table("p6e.tsv", H6_END, "m\t1\t2\t3\t4\t5"))
+pm = sa.read_prices(table("p6m.tsv", H6_MID, "m\t1\t2\t3\t5\t4"))
+out.append("6col_same_rates=%s" % (pe == pm and pe["m"]["cache_write_1h"] == 5.0 and pe["m"]["cache_read"] == 4.0))
+for name, hdr in (("bad_extra", H5 + "\tbogus"), ("bad_order", "model\toutput_per_mtok\tinput_per_mtok\tcache_write_per_mtok\tcache_read_per_mtok"), ("bad_dup", H6_END + "\tcache_write_1h_per_mtok")):
+    try:
+        sa.read_prices(table(name + ".tsv", hdr, "m\t1\t2\t3\t4"))
+        out.append("%s=accepted" % name)
+    except sa.ValidationError:
+        out.append("%s=refused" % name)
+tok = {"input": 0, "output": 0, "cache_write": 1000000, "cache_read": 0}
+def cost(prices, t):
+    return round(sa.turn_cost({"model": "m", "tokens": t}, prices, set()), 6)
+out.append("no_split_6col=%s" % cost(pe, tok))
+out.append("split_6col=%s" % cost(pe, dict(tok, cache_write_1h=400000)))
+out.append("split_5col=%s" % cost(p5, dict(tok, cache_write_1h=400000)))
+out.append("split_clamped=%s" % cost(pe, dict(tok, cache_write_1h=9000000)))
+t = sa.turn_tokens({"cache_creation_input_tokens": 10, "cache_creation": {"ephemeral_1h_input_tokens": 4}})
+out.append("turn_tokens_1h=%s total=%s" % (t["cache_write_1h"], sa.token_total(t)))
+print(" ".join(out))
+PYEOF
+)"
+WANT_1H="5col_no_1h_key=True 6col_same_rates=True bad_extra=refused bad_order=refused bad_dup=refused no_split_6col=3.0 split_6col=3.8 split_5col=3.0 split_clamped=5.0 turn_tokens_1h=4 total=10"
+if [ "$ONEH_OUT" = "$WANT_1H" ]; then
+  ok "1h cache-write: optional column accepted in both positions, other shapes refused, split priced, 5-column unchanged"
+else
+  bad "1h cache-write: got [$ONEH_OUT], wanted [$WANT_1H]"
+fi
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
