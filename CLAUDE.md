@@ -41,10 +41,10 @@ warning` (over `scripts/*.sh`, `scripts/lib/*.sh` and `actions/*/*.sh`),
 `self-lint` (comment-lint, also dogfooded), `bar-check` (`report-only: "true"`),
 and `no-major`.
 
-**Only `selftest` and `self-lint` are required status checks** on the `main`
-ruleset (`gh api repos/moneymikeMD/ai-toolkit/rulesets/23685819`). No approving
-review is required. The other four jobs run and report but do not gate a
-merge — including `no-major`, which carries the version cap. Repository admins
+**`selftest`, `self-lint` and `no-major` are the required status checks** on
+the `main` ruleset (`gh api repos/moneymikeMD/ai-toolkit/rulesets/23685819`).
+No approving review is required. The other jobs run and report but do not gate
+a merge. Repository admins
 are ruleset bypass actors, so nothing mechanical stops a maintainer's merge
 even with `no-major` red; the cap holds by rule, not by gate.
 
