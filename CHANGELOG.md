@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.3](https://github.com/moneymikeMD/ai-toolkit/compare/v1.8.2...v1.8.3) (2026-10-02)
+
+
+### Bug Fixes
+
+* NWM-189 script-analytics.py accepts an optional cache_write_1h_per_mtok price column and prices the 1h cache-write split ([#67](https://github.com/moneymikeMD/ai-toolkit/issues/67)) ([cd0e830](https://github.com/moneymikeMD/ai-toolkit/commit/cd0e8305ee14b25ab438df44e9248845d58f0e78))
+
 ## [1.8.2](https://github.com/moneymikeMD/ai-toolkit/compare/v1.8.1...v1.8.2) (2026-09-26)
 
 
