@@ -189,14 +189,48 @@ print('|'.join([
   ','.join(p['allow']),
   d.get('unrelatedKey',''),
 ]))")
-check "only agent:true repos plus extras, sorted, absolute" \
-    "${GOT%%|*}" "$TMP/extra,$WORK/alpha"
+check "only extra_agent_dirs, verbatim; no member repo listed" \
+    "${GOT%%|*}" "$TMP/extra"
 check "an agent:true adjacent entry does not widen the read scope" \
     "$(echo "${GOT%%|*}" | grep -c 'adjacent-')" "0"
 check "existing allow list preserved" "$(echo "$GOT" | cut -d'|' -f2)" "Bash(gh pr merge:*)"
 check "unrelated keys preserved" "$(echo "$GOT" | cut -d'|' -f3)" "keep me"
 check "stale entry replaced, not appended" \
     "$(grep -c '/stale/path' "$WORK/.claude/settings.json")" "0"
+
+cp "$WORK/repos.yaml" "$TMP/repos.yaml.bak"
+python3 - "$WORK/repos.yaml" <<'PY'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r"extra_agent_dirs:\n(  - .*\n)+", "extra_agent_dirs:\n  - ~/neutral/dir\n", s)
+open(p, "w").write(s)
+PY
+"$WS" gen-settings --root "$WORK" >/dev/null
+# shellcheck disable=SC2088
+TILDE_ENTRY='~/neutral/dir'
+check "a ~/ entry is written unexpanded" \
+    "$(python3 -c "import json;print(json.load(open('$WORK/.claude/settings.json'))['permissions']['additionalDirectories'][0])")" "$TILDE_ENTRY"
+
+python3 - "$WORK/repos.yaml" <<'PY'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(r"extra_agent_dirs:\n(  - .*\n)+", "", s)
+open(p, "w").write(s)
+PY
+"$WS" gen-settings --root "$WORK" >/dev/null
+check "empty list removes additionalDirectories, keeps siblings" \
+    "$(python3 -c "
+import json;d=json.load(open('$WORK/.claude/settings.json'))
+print('additionalDirectories' in d['permissions'], d['permissions']['allow'][0], d['unrelatedKey'])")" \
+    "False Bash(gh pr merge:*) keep me"
+
+echo '{"permissions": {"additionalDirectories": ["/x"]}, "k": 1}' > "$WORK/.claude/settings.json"
+"$WS" gen-settings --root "$WORK" >/dev/null
+check "empty permissions removed too" \
+    "$(python3 -c "import json;print(json.dumps(json.load(open('$WORK/.claude/settings.json'))))")" '{"k": 1}'
+cp "$TMP/repos.yaml.bak" "$WORK/repos.yaml"
 
 echo
 echo "workspace-selftest: $PASS passed, $FAIL failed"

@@ -17,7 +17,8 @@
 #   pull                  git pull --ff-only in every clean repo
 #   foreach -- CMD...     run CMD in each repo directory that exists
 #   gen-settings          write .claude/settings.json additionalDirectories
-#                          from every `agent: true` repo plus extra_agent_dirs,
+#                          from extra_agent_dirs verbatim (members are
+#                          subdirectories of the root, so need no entry),
 #                          leaving all other settings keys untouched
 #
 #   --root PATH   the workspace directory. Default: nearest ancestor of the
@@ -34,7 +35,7 @@ DRY_RUN=0
 
 die_usage() { echo "workspace.sh: $1" >&2; exit 2; }
 die() { echo "workspace.sh: $1" >&2; exit 1; }
-usage() { sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'; }
 
 [ $# -ge 1 ] || { usage; exit 2; }
 
@@ -170,20 +171,20 @@ import json, os, sys, yaml
 manifest, root, out = sys.argv[1], sys.argv[2], sys.argv[3]
 doc = yaml.safe_load(open(manifest)) or {}
 
-dirs = [os.path.join(root, n)
-        for n, r in (doc.get("repos") or {}).items() if (r or {}).get("agent")]
-dirs += [os.path.expanduser(p) for p in (doc.get("extra_agent_dirs") or [])]
-dirs.sort()
+dirs = sorted(doc.get("extra_agent_dirs") or [])
 
 settings = {}
 if os.path.exists(out):
     with open(out) as fh:
         settings = json.load(fh)
 
-# Absolute, because a relative additionalDirectories entry resolves against a
-# root that is not the settings file's own directory, which silently yields a
-# path that does not exist.
-settings.setdefault("permissions", {})["additionalDirectories"] = dirs
+perms = settings.get("permissions")
+if dirs:
+    settings.setdefault("permissions", {})["additionalDirectories"] = dirs
+elif isinstance(perms, dict):
+    perms.pop("additionalDirectories", None)
+    if not perms:
+        del settings["permissions"]
 rendered = json.dumps(settings, indent=2) + "\n"
 
 if os.environ.get("DRY_RUN") == "1":
