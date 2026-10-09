@@ -610,8 +610,8 @@ intended commit, because a push's exit code does not prove the tag moved.
 
 ## workspace
 
-Operates on every repo a workspace manifest names, and generates the agent
-read scope from it. A workspace is a directory holding a `repos.yaml` and one
+Operates on every repo a workspace manifest names, and generates the extra
+agent read scope from it. A workspace is a directory holding a `repos.yaml` and one
 subdirectory per project, each its own independent git clone.
 
 ```bash
@@ -631,20 +631,22 @@ work from inside any project in the workspace. `--dry-run` makes `clone` and
 **Only `repos:` is a member.** A manifest may also carry an `adjacent_repos:`
 key, for repos whose landing policy `protections.sh` records but which are not
 subdirectories of the workspace. Every verb here ignores that key: those
-entries are never listed, cloned, pulled, iterated by `foreach`, or added to
-`additionalDirectories`, whatever they set `agent` to.
+entries are never listed, cloned, pulled or iterated by `foreach`.
 
 **No submodules and no pinning.** The manifest records which repos belong
-together and which an agent may read, never which commit each sits at. A
+together, never which commit each sits at. A
 workspace that must be restorable to an exact multi-repo state wants submodules
 or a lockfile instead; this is for the case where the requirement is only that
 every project is visible and operable at once.
 
-**Why `gen-settings` writes absolute paths.** A relative
-`additionalDirectories` entry resolves against a root that is not the settings
-file's own directory, so `../sibling` silently names a path that does not
-exist. The generated entries are absolute, and every other key in the file is
-preserved.
+**What `gen-settings` writes.** Only `extra_agent_dirs`, verbatim and sorted.
+Member repos are not listed: a session launched at the workspace root can read
+every subdirectory with no `additionalDirectories` entry. Entries are not
+expanded, so `~/...` stays machine-neutral in a tracked file; Claude Code
+expands a leading `~/` itself and silently drops an entry that does not exist.
+With no `extra_agent_dirs`, the key is removed, and `permissions` with it if
+that leaves it empty. Every other key in the file is preserved. The `agent:`
+flag no longer drives settings; `list` still prints it.
 
 Requires PyYAML (`pip3 install pyyaml`, or `apt install python3-yaml`). The
 script fails with that message rather than misparsing.
