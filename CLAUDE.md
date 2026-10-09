@@ -317,11 +317,9 @@ nothing pins it, and nothing fails here if `verify-run.sh` is renamed or moved.
 
 ## The `release` MCP server
 
-`.mcp.json` registers a stdio MCP server named `release` at
-`${HOME}/.claude/mcp/release/server.js`. This repo owns the *registration*
-only; the server is installed by dotfiles. It exposes `pr_land`,
+This repo registers no MCP server. The `release` server
+(`${HOME}/.claude/mcp/release/server.js`, installed by dotfiles) comes from the
+night-watchman plugin's own `.mcp.json`. It exposes `pr_land`,
 `release_publish`, `tag_major` and `checks`, each of which execs the script
-above that owns the behaviour. A newly registered MCP server stays at
-*pending approval* until a human runs `claude` once in the checkout; an agent
-cannot approve one for itself. Whether it is live in a given session is
-answered by whether `mcp__release__*` tools are listed, not by `.mcp.json`.
+above that owns the behaviour. Whether it is live in a given session is
+answered by whether the plugin's `release` tools are listed.
