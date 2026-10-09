@@ -207,8 +207,10 @@ s = re.sub(r"extra_agent_dirs:\n(  - .*\n)+", "extra_agent_dirs:\n  - ~/neutral/
 open(p, "w").write(s)
 PY
 "$WS" gen-settings --root "$WORK" >/dev/null
+# shellcheck disable=SC2088
+TILDE_ENTRY='~/neutral/dir'
 check "a ~/ entry is written unexpanded" \
-    "$(python3 -c "import json;print(json.load(open('$WORK/.claude/settings.json'))['permissions']['additionalDirectories'][0])")" '~/neutral/dir'
+    "$(python3 -c "import json;print(json.load(open('$WORK/.claude/settings.json'))['permissions']['additionalDirectories'][0])")" "$TILDE_ENTRY"
 
 python3 - "$WORK/repos.yaml" <<'PY'
 import sys, re
