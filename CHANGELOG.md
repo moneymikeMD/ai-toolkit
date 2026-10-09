@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.8.3...v1.9.0) (2026-10-09)
+
+
+### Features
+
+* gen-settings writes only extra_agent_dirs, verbatim ([#70](https://github.com/moneymikeMD/ai-toolkit/issues/70)) ([0d1cf59](https://github.com/moneymikeMD/ai-toolkit/commit/0d1cf598d185b3da75612878efb6c4695dfe5125))
+
 ## [1.8.3](https://github.com/moneymikeMD/ai-toolkit/compare/v1.8.2...v1.8.3) (2026-10-02)
 
 
