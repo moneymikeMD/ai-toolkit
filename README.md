@@ -734,26 +734,17 @@ to stderr so it cannot corrupt it. That is what makes the pipeline form work.
 
 ## release MCP server
 
-`.mcp.json` in this repo registers a stdio MCP server (`release`, sourced
-from a private dotfiles repo's `dot_claude/mcp/release/`) exposing four
-tools: `pr_land`, `release_publish`, `tag_major`, `checks`. It is a
-dispatcher, not a second implementation — every tool call execs the script
-above (or `gh pr checks`) that already owns the behaviour, so it holds no
-release logic of its own.
+The `release` stdio MCP server (sourced from a private dotfiles repo's
+`dot_claude/mcp/release/`) is registered by the night-watchman plugin, not by
+this repo. It exposes four tools: `pr_land`, `release_publish`, `tag_major`,
+`checks`. It is a dispatcher, not a second implementation — every tool call
+execs the script above (or `gh pr checks`) that already owns the behaviour, so
+it holds no release logic of its own.
 
 The point is analytics granularity, not a new capability: a call through
 this repo's own scripts stays inside one `Bash` bucket in tool-call
 telemetry, while an MCP tool call arrives under its own name. No tool takes
 a bypass flag, and none reaches an action its underlying script cannot.
-
-Enabled here only, not globally — see the server's own README for the
-registration snippet and how to run its selftest.
-
-The server path is written `${HOME}/.claude/mcp/release/server.js`.
-`.mcp.json` expands `${VAR}` and `${VAR:-default}` in `command`, `args`, `env`,
-`url` and `headers`, so no absolute home directory belongs in it. An unset
-variable is left unexpanded and warned about rather than failing the load, so a
-checkout on a machine without the server simply has no `release` tool.
 
 The [no-personal-paths](#no-personal-paths) action enforces the rule at the top
 of this file, and this repo runs it on its own CI.

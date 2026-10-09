@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "release": {
-      "command": "node",
-      "args": ["${HOME}/.claude/mcp/release/server.js"]
-    }
-  }
-}
