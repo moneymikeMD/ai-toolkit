@@ -73,12 +73,14 @@ ROOT=$(cd "$ROOT" && pwd)
 MANIFEST="$ROOT/repos.yaml"
 [ -f "$MANIFEST" ] || die_usage "no manifest at $MANIFEST"
 
-python3 -c 'import yaml' 2>/dev/null || die "PyYAML is required: pip3 install pyyaml (or apt install python3-yaml)"
+# shellcheck source=lib/pyyaml.sh
+. "$(cd "$(dirname "$0")" && pwd)/lib/pyyaml.sh"
+resolve_yaml_python || die "$YAML_PY_ERROR"
 
 # Emits one TAB-separated record per repo: name, url, branch, agent.
 # A url of "-" means the manifest declared it local-only.
 read_manifest() {
-    python3 - "$MANIFEST" <<'PY'
+    "${YAML_PY[@]}" - "$MANIFEST" <<'PY'
 import sys, yaml
 doc = yaml.safe_load(open(sys.argv[1])) or {}
 for name, r in (doc.get("repos") or {}).items():
@@ -166,7 +168,7 @@ foreach)
 
 gen-settings)
     OUT="$ROOT/.claude/settings.json"
-    DRY_RUN="$DRY_RUN" python3 - "$MANIFEST" "$ROOT" "$OUT" <<'PY'
+    DRY_RUN="$DRY_RUN" "${YAML_PY[@]}" - "$MANIFEST" "$ROOT" "$OUT" <<'PY'
 import json, os, sys, yaml
 manifest, root, out = sys.argv[1], sys.argv[2], sys.argv[3]
 doc = yaml.safe_load(open(manifest)) or {}

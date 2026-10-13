@@ -115,8 +115,10 @@ ROOT=$(cd "$ROOT" && pwd)
 MANIFEST="$ROOT/repos.yaml"
 [ -f "$MANIFEST" ] || die_usage "no manifest at $MANIFEST"
 
-need gh python3
-python3 -c 'import yaml' 2>/dev/null || die "PyYAML is required: pip3 install pyyaml"
+need gh
+# shellcheck source=lib/pyyaml.sh
+. "$HERE/lib/pyyaml.sh"
+resolve_yaml_python || die "$YAML_PY_ERROR"
 
 # Resolved before any fetching, so a missing CLI costs nothing rather than
 # being discovered after twenty API calls. It is not on PATH by default.
@@ -140,7 +142,7 @@ if [ "$STORE" -eq 1 ]; then
 fi
 
 set +e
-python3 - "$MANIFEST" "$MODE" "$EMIT_JSON" <<'PY'
+"${YAML_PY[@]}" - "$MANIFEST" "$MODE" "$EMIT_JSON" <<'PY'
 import base64, difflib, fnmatch, json, os, re, subprocess, sys
 from datetime import datetime, timezone
 

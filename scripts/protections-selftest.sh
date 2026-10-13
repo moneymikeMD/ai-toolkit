@@ -539,6 +539,55 @@ strip_generated "$FOLD/repos.yaml" | sed '/^  juliet:/,$ { /^    visibility: pub
 check "stripping the generated block and the inserted key reproduces the input" "same" \
     "$(cmp -s "$WORK/fold-stripped.yaml" "$WORK/fold-original.yaml" && echo same || echo differs)"
 
+echo "== interpreter resolution (PyYAML)"
+REAL_PY="$(command -v python3)"
+TOOLS="$WORK/tools"
+mkdir -p "$TOOLS"
+for t in bash env git awk sed grep sort tr cat rm mkdir mktemp date base64 dirname cp mv cmp wc head tail cut basename chmod uniq; do
+    p="$(command -v "$t" 2>/dev/null)" && [ -x "$p" ] && ln -sf "$p" "$TOOLS/$t"
+done
+mk_stub_py() {
+    # mk_stub_py PATH LOG: a python3 whose `import yaml` fails, logging each call
+    printf '#!/bin/sh\necho "$0" >> "%s"\ncase "$*" in *"import yaml"*) exit 1;; esac\nexit 1\n' "$2" > "$1"
+    chmod +x "$1"
+}
+mk_wrapper_py() {
+    # mk_wrapper_py PATH LOG: a working python that records its use
+    printf '#!/bin/sh\necho "$0" >> "%s"\nexec "%s" "$@"\n' "$2" "$REAL_PY" > "$1"
+    chmod +x "$1"
+}
+RES="$WORK/res"
+BASELINE_OUT="$("$SUT" --root "$WS" --check 2>&1)"; BASELINE_RC=$?
+
+mkdir -p "$RES/c1/bin"
+mk_stub_py "$RES/c1/bin/python3" "$RES/c1/py.log"
+printf '#!/bin/sh\necho "$*" > "%s"\nwhile [ "$1" != python ]; do shift; done; shift\nexec "%s" "$@"\n' "$RES/c1/uv.args" "$REAL_PY" > "$RES/c1/bin/uv"
+chmod +x "$RES/c1/bin/uv"
+OUT="$(PATH="$BIN:$RES/c1/bin:$TOOLS" "$SUT" --root "$WS" --check 2>&1)"; RC=$?
+check "a yaml-less python3 first on PATH still yields the same table, via uv" "$BASELINE_RC|$BASELINE_OUT" "$RC|$OUT"
+check "uv was asked for a PyYAML 6.x range with no project" "yes" \
+    "$(grep -q -- '--no-project.*--with pyyaml>=6,<7' "$RES/c1/uv.args" && echo yes || echo no)"
+
+mkdir -p "$RES/c2/first" "$RES/c2/later"
+mk_stub_py "$RES/c2/first/python3" "$RES/c2/py.log"
+mk_wrapper_py "$RES/c2/later/python3.99" "$RES/c2/used.log"
+OUT="$(PATH="$BIN:$RES/c2/first:$RES/c2/later:$TOOLS" "$SUT" --root "$WS" --check 2>&1)"; RC=$?
+check "with uv hidden, a later python3.N that has yaml is found" "$BASELINE_RC|$BASELINE_OUT" "$RC|$OUT"
+check "and it is the versioned interpreter that ran" "yes" \
+    "$(grep -q 'python3.99' "$RES/c2/used.log" 2>/dev/null && echo yes || echo no)"
+
+mkdir -p "$RES/c3/bin"
+mk_stub_py "$RES/c3/bin/python3" "$RES/c3/py.log"
+OUT="$(PATH="$BIN:$RES/c3/bin:$TOOLS" "$SUT" --root "$WS" --check 2>&1)"; RC=$?
+check "nothing usable exits non-zero" "nonzero" "$([ "$RC" -ne 0 ] && echo nonzero || echo "rc=$RC")"
+check "and the message names every route tried" "yes" \
+    "$(printf '%s' "$OUT" | grep -q 'AI_TOOLKIT_PYTHON' && printf '%s' "$OUT" | grep -q 'uv' && printf '%s' "$OUT" | grep -q 'python3' && echo yes || echo no)"
+
+OUT="$(AI_TOOLKIT_PYTHON="" "$SUT" --root "$WS" --check 2>&1)"; RC=$?
+check "AI_TOOLKIT_PYTHON set but empty stops the run" "nonzero" "$([ "$RC" -ne 0 ] && echo nonzero || echo "rc=$RC")"
+OUT="$(AI_TOOLKIT_PYTHON="$REAL_PY" PATH="$BIN:$RES/c3/bin:$TOOLS" "$SUT" --root "$WS" --check 2>&1)"; RC=$?
+check "AI_TOOLKIT_PYTHON naming a working interpreter wins over PATH" "$BASELINE_RC|$BASELINE_OUT" "$RC|$OUT"
+
 echo "== a name under both keys is refused, never merged"
 DUP="$WORK/dup"
 mkdir -p "$DUP"

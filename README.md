@@ -648,8 +648,9 @@ With no `extra_agent_dirs`, the key is removed, and `permissions` with it if
 that leaves it empty. Every other key in the file is preserved. The `agent:`
 flag no longer drives settings; `list` still prints it.
 
-Requires PyYAML (`pip3 install pyyaml`, or `apt install python3-yaml`). The
-script fails with that message rather than misparsing.
+Needs PyYAML, found by `scripts/lib/pyyaml.sh`: `$AI_TOOLKIT_PYTHON` if set, else
+`uv run --with 'pyyaml>=6,<7'` when uv is on PATH, else the first `python3` or `python3.N`
+that can `import yaml`. With none, the script exits naming each route it tried.
 
 ## protections
 
@@ -709,7 +710,7 @@ rather than assumed.
 generated block becoming the next stale artifact, and it is the same shape as
 `known-issue.sh lint`. Run it from CI or a cron.
 
-Requires `gh`, authenticated, and PyYAML.
+Requires `gh`, authenticated, and PyYAML, resolved as for `workspace.sh` above.
 
 **The state store.** `--store` writes the same facts to the `workspace-state`
 store as well as to `repos.yaml`, through that CLI. It is off by default,

@@ -233,5 +233,43 @@ check "empty permissions removed too" \
 cp "$TMP/repos.yaml.bak" "$WORK/repos.yaml"
 
 echo
+echo "== interpreter resolution (PyYAML)"
+REAL_PY="$(command -v python3)"
+TOOLS="$TMP/tools"
+mkdir -p "$TOOLS"
+for t in bash env git awk sed grep sort tr cat rm mkdir mktemp date dirname cp mv cmp wc head tail cut basename chmod uniq; do
+    p="$(command -v "$t" 2>/dev/null)" && [ -x "$p" ] && ln -sf "$p" "$TOOLS/$t"
+done
+mk_stub_py() { printf '#!/bin/sh\nexit 1\n' > "$1"; chmod +x "$1"; }
+BASE="$("$WS" list --root "$WORK" 2>&1)"
+RES="$TMP/res"
+
+mkdir -p "$RES/c1"
+mk_stub_py "$RES/c1/python3"
+printf '#!/bin/sh\necho "$*" > "%s"\nwhile [ "$1" != python ]; do shift; done; shift\nexec "%s" "$@"\n' "$RES/uv.args" "$REAL_PY" > "$RES/c1/uv"
+chmod +x "$RES/c1/uv"
+check "a yaml-less python3 first on PATH still lists the same repos, via uv" \
+    "$(PATH="$RES/c1:$TOOLS" "$WS" list --root "$WORK" 2>&1)" "$BASE"
+check "uv was asked for a PyYAML 6.x range with no project" \
+    "$(grep -q -- '--no-project.*--with pyyaml>=6,<7' "$RES/uv.args" 2>/dev/null && echo yes || echo no)" "yes"
+
+mkdir -p "$RES/c2/first" "$RES/c2/later"
+mk_stub_py "$RES/c2/first/python3"
+ln -sf "$REAL_PY" "$RES/c2/later/python3.99"
+check "with uv hidden, a later python3.N that has yaml is found" \
+    "$(PATH="$RES/c2/first:$RES/c2/later:$TOOLS" "$WS" list --root "$WORK" 2>&1)" "$BASE"
+
+mkdir -p "$RES/c3"
+mk_stub_py "$RES/c3/python3"
+set +e
+OUT="$(PATH="$RES/c3:$TOOLS" "$WS" list --root "$WORK" 2>&1)"; RC=$?
+set -e
+check "nothing usable exits non-zero naming every route" \
+    "$RC|$(printf '%s' "$OUT" | grep -q 'AI_TOOLKIT_PYTHON' && printf '%s' "$OUT" | grep -q 'uv' && printf '%s' "$OUT" | grep -q 'python3' && echo yes || echo no)" "1|yes"
+set +e
+AI_TOOLKIT_PYTHON="" "$WS" list --root "$WORK" >/dev/null 2>&1; RC=$?
+set -e
+check "AI_TOOLKIT_PYTHON set but empty stops the run" "$RC" "1"
+
 echo "workspace-selftest: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
