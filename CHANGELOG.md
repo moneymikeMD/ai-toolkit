@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.9.1](https://github.com/moneymikeMD/ai-toolkit/compare/v1.9.0...v1.9.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* **cost:** script-analytics scores SubagentHandback reports and the FINDINGS tally, adds backfill-findings (NWM-200) ([#74](https://github.com/moneymikeMD/ai-toolkit/issues/74)) ([ae9a597](https://github.com/moneymikeMD/ai-toolkit/commit/ae9a5977a2552e3a2c5568610e919a0206a95c75))
+* **scripts:** protections.sh and workspace.sh resolve their own PyYAML interpreter (NWM-201) ([#76](https://github.com/moneymikeMD/ai-toolkit/issues/76)) ([1d94e70](https://github.com/moneymikeMD/ai-toolkit/commit/1d94e709676a908c8652036024a9390db37bb50a))
+
 ## [1.9.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.8.3...v1.9.0) (2026-10-09)
 
 
