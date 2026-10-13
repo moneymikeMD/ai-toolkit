@@ -151,9 +151,10 @@ w(review_path, [
     user_text("2026-09-13T10:05:01Z", review_prompt),
     assistant("2026-09-13T10:05:30Z", "r1", 200, [
         {"type": "text", "text": (
-            "scripts/script-analytics.py:42 - CRITICAL - missing validation\n"
-            "no HIGH severity issues found\n"
-            "2 MEDIUM findings noted"
+            "1. scripts/script-analytics.py:42 -- CRITICAL -- missing validation\n"
+            "No HIGH severity issues found\n"
+            "2. scripts/script-analytics.py:50 -- MEDIUM -- first\n"
+            "3. scripts/script-analytics.py:60 -- MEDIUM -- second"
         )},
     ]),
 ])
@@ -289,9 +290,9 @@ review = [e for e in events if e['event'] == 'review'][0]
 f = review['findings']
 assert f['critical'] == 1, 'expected critical=1 (path-prefixed), got %r' % f['critical']
 assert f['high'] == 0, 'expected high=0 (negated by \"no\"), got %r' % f['high']
-assert f['medium'] == 2, 'expected medium=2 (count-prefixed \"2 MEDIUM\"), got %r' % f['medium']
+assert f['medium'] == 2, 'expected medium=2 (two numbered items), got %r' % f['medium']
 "; then
-  ok "extract: findings heuristics (path-prefix, negation, count-prefix) all correct"
+  ok "extract: findings heuristics (numbered item, negation, item count) all correct"
 else
   bad "extract: findings heuristics assertion failed"
 fi
@@ -1578,6 +1579,157 @@ if [ "$ONEH_OUT" = "$WANT_1H" ]; then
   ok "1h cache-write: optional column accepted in both positions, other shapes refused, split priced, 5-column unchanged"
 else
   bad "1h cache-write: got [$ONEH_OUT], wanted [$WANT_1H]"
+fi
+
+# ---- NWM-200: review findings delivered through SubagentHandback ------
+# Recorded: scripts/fixtures/script-analytics/reports/*.md and the transcript
+# lines under projects/ (see PROVENANCE.md). Synthetic: the events rows and
+# the short messages written inline below.
+FIXD="$HERE/fixtures/script-analytics"
+BF="$WORK/bf"
+mkdir -p "$BF"
+cp -R "$FIXD/projects" "$BF/projects"
+BFSUB="$BF/projects/-fixture-project/00000000-0000-4000-8000-000000000001/subagents"
+BFSESS=00000000-0000-4000-8000-000000000001
+
+python3 - "$BFSUB" "$BF/msgs" << 'PYEOF'
+import json, os, sys
+sub, msgs = sys.argv[1], sys.argv[2]
+os.makedirs(msgs, exist_ok=True)
+base = json.loads(open(os.path.join(sub, "agent-ae1356d98dba29872.jsonl")).read())
+cases = {
+    "tallywins": "1. a.sh:1 -- HIGH -- x\n2. a.sh:2 -- MEDIUM -- y\n\nFINDINGS: CRITICAL=0 HIGH=0 MEDIUM=0 LOW=2\n",
+    "tallymalformed": "1. a.sh:1 -- HIGH -- x\nFINDINGS: CRITICAL=0 HIGH=0 MEDIUM=1\n",
+    "tallyprose": "HIGH-looking prose, a MEDIUM aside.\n\nFINDINGS: CRITICAL=0 HIGH=0 MEDIUM=0 LOW=4\n\nThanks; LOW items remain.\n",
+    "tallylast": "FINDINGS: CRITICAL=0 HIGH=5 MEDIUM=0 LOW=0\nrevised\n**FINDINGS: CRITICAL=0 HIGH=1 MEDIUM=0 LOW=0**\n",
+    "negation": "No CRITICAL, HIGH or MEDIUM findings.\nNo CRITICAL/HIGH found.\nVerdict: SHIP.\n",
+    "fixlist": "## Findings\n1. a.sh:1 -- HIGH -- x\n\nBlocking before this can ship:\n1. HIGH -- fix x\n2. MEDIUM -- fix y\n\nLOW items are not blocking.\n",
+    "table": "| Severity | where | what |\n|---|---|---|\n| CRITICAL | a | b |\n| HIGH | a | b |\n| MEDIUM | a | b |\n| LOW | a | b |\n",
+    "coded": "H1. a.sh:1 the first\nM2. a.sh:2 the second\nL3. a.sh:3 the third\n",
+    "pair": "1. a.sh:1 -- LOW/MEDIUM -- x\n",
+    "summaryitems": "Result: 0 CRITICAL, 2 HIGH.\n1. a.sh:1 -- LOW -- x\n",
+    "summaryonly": "Result: 0 CRITICAL, 1 HIGH, 2 MEDIUM.\n",
+    "headings": "### HIGH\n## MEDIUM\n**LOW:**\nCRITICAL\n",
+}
+for name, text in cases.items():
+    aid = "atest" + name
+    line = json.loads(json.dumps(base))
+    line["agentId"] = aid
+    line["message"]["content"][0]["input"]["message"] = text
+    with open(os.path.join(sub, "agent-%s.jsonl" % aid), "w") as fh:
+        fh.write(json.dumps(line) + "\n")
+    with open(os.path.join(sub, "agent-%s.meta.json" % aid), "w") as fh:
+        json.dump({"agentType": "script-reviewer"}, fh)
+# a second text-block-only transcript: the report is a plain text block, not a handback
+line = json.loads(json.dumps(base))
+line["agentId"] = "atesttextblock"
+line["message"]["content"] = [{"type": "text", "text": "1. a.sh:1 -- MEDIUM -- x\n2. a.sh:2 -- LOW -- y\n"}]
+with open(os.path.join(sub, "agent-atesttextblock.jsonl"), "w") as fh:
+    fh.write(json.dumps(line) + "\n")
+with open(os.path.join(sub, "agent-atesttextblock.meta.json"), "w") as fh:
+    json.dump({"agentType": "script-reviewer"}, fh)
+PYEOF
+
+bf_row() {
+  printf '{"ts": "2026-10-12T19:06:00Z", "script": "scripts/x.sh", "scripts": ["scripts/x.sh"], "event": "review", "cause": "-", "outcome": "-", "round": "-", "session": "%s", "agent_id": "%s", "agent_type": "script-reviewer", "model": "claude-sonnet-5-5", "turns": 3, "tokens": 100, "usd": 0.5, "duration_s": 60, "findings": %s, "ticket": "-", "source": "transcript", "key": "%s", "note": "-"}\n' \
+    "$BFSESS" "$1" "$2" "$1"
+}
+BFZ='{"critical": 0, "high": 0, "medium": 0, "low": 0}'
+bf_run() { # bf_run <events> [args...]: BF_OUT = stdout+stderr, BF_RC = exit code
+  local ev="$1"; shift
+  BF_RC=0
+  BF_OUT="$(python3 "$ANALYTICS" backfill-findings --events "$ev" --projects-dir "$BF/projects" "$@" 2>&1)" || BF_RC=$?
+}
+bf_want() { # bf_want <label> <agent-id> <C/H/M/L>
+  local got
+  got="$(printf '%s\n' "$BF_OUT" | awk -v id="$2" '$3 == id {print $NF}')"
+  if [ "$got" = "$3" ]; then ok "$1"; else bad "$1 (want $3, got [$got])"; fi
+}
+
+if python3 "$ANALYTICS" backfill-findings --help > /dev/null 2>&1; then
+  ok "backfill-findings: --help exits 0"
+else
+  bad "backfill-findings: --help did not exit 0"
+fi
+
+BFEV="$WORK/bf-batch.jsonl"
+: > "$BFEV"
+for id in ad18608b52f6f78cd ae1356d98dba29872 a47c6fad7bce052bf aed4a791a7d18cc59 \
+    atesttallywins atesttallymalformed atesttallyprose atesttallylast atestnegation atestfixlist \
+    atesttable atestcoded atestpair atestsummaryitems atestsummaryonly atestheadings atesttextblock; do
+  bf_row "$id" "$BFZ" >> "$BFEV"
+done
+bf_run "$BFEV" --dry-run
+bf_want "SubagentHandback report is counted (0/1/1/1, recorded)" ad18608b52f6f78cd 0/1/1/1
+bf_want "SubagentHandback report is counted (0/1/4/3, recorded)" ae1356d98dba29872 0/1/4/3
+bf_want "mutation table with no severity cell and one LOW item counts 0/0/0/1 (recorded)" aed4a791a7d18cc59 0/0/0/1
+case "$BF_OUT" in
+  *a47c6fad7bce052bf*) bad "recorded 'No CRITICAL/HIGH found' re-check listed as changing: $BF_OUT" ;;
+  *) ok "recorded 'No CRITICAL/HIGH found' re-check stays 0/0/0/0" ;;
+esac
+bf_want "tally line wins over a contradictory body" atesttallywins 0/0/0/2
+bf_want "tally missing LOW= is not a tally: the block is line-scored" atesttallymalformed 0/1/0/0
+bf_want "tally among prose that names severities counts from the tally alone" atesttallyprose 0/0/0/4
+bf_want "the last of several tally lines wins, bold form accepted" atesttallylast 0/1/0/0
+case "$BF_OUT" in
+  *atestnegation*) bad "negation lines listed as changing: $BF_OUT" ;;
+  *) ok "'No CRITICAL, HIGH or MEDIUM findings' and 'No CRITICAL/HIGH found' count nothing" ;;
+esac
+bf_want "fixes under 'Blocking before this can ship' are not findings" atestfixlist 0/1/0/0
+bf_want "a table row counts under its first-cell severity" atesttable 1/1/1/1
+bf_want "coded H1./M2./L3. items count at their severity" atestcoded 0/1/1/1
+bf_want "LOW/MEDIUM counts once, at the higher" atestpair 0/0/1/0
+bf_want "a stated count is dropped when the block has a finding line" atestsummaryitems 0/0/0/1
+bf_want "a stated count is used when the block has no finding line" atestsummaryonly 0/1/2/0
+case "$BF_OUT" in
+  *atestheadings*) bad "severity group headings listed as changing: $BF_OUT" ;;
+  *) ok "severity group headings alone count nothing" ;;
+esac
+bf_want "a plain text block is still scored" atesttextblock 0/0/1/1
+
+# a non-zero row is never lowered by default; --allow-lower is the override
+LOWEV="$WORK/bf-low.jsonl"
+{
+  printf '{"event":"author",  "note": "caf\xc3\xa9",\t"findings": {"critical": 9, "high": 9, "medium": 9, "low": 9}}\r\n'
+  printf '{not json at all\n'
+  bf_row a47c6fad7bce052bf '{"critical": 0, "high": 2, "medium": 0, "low": 0}'
+  bf_row ad18608b52f6f78cd "$BFZ"
+} > "$LOWEV"
+chmod 640 "$LOWEV"
+cp "$LOWEV" "$WORK/bf-low.orig"
+bf_run "$LOWEV"
+if [ "$BF_RC" = 0 ] && python3 - "$LOWEV" "$WORK/bf-low.orig" << 'PYEOF'
+import sys
+new = open(sys.argv[1], "rb").read().split(b"\n")
+old = open(sys.argv[2], "rb").read().split(b"\n")
+assert new[0] == old[0] and new[1] == old[1], "non-review lines changed"
+assert new[2] == old[2], "non-zero row was lowered without --allow-lower"
+assert new[3] != old[3] and b'"high": 1' in new[3], "zero row was not raised"
+PYEOF
+then
+  ok "backfill-findings refuses to lower a non-zero row, still raises a zero one, leaves other lines byte-identical"
+else
+  bad "backfill-findings lowered a non-zero row without --allow-lower (rc=$BF_RC): $BF_OUT"
+fi
+case "$BF_OUT" in
+  *"1 refused"*) ok "backfill-findings summary counts the refused row" ;;
+  *) bad "backfill-findings summary does not count the refused row: $BF_OUT" ;;
+esac
+if [ "$(find "$LOWEV" -type f -perm 640)" = "$LOWEV" ]; then
+  ok "backfill-findings keeps the events file mode"
+else
+  bad "backfill-findings changed the events file mode"
+fi
+bf_run "$LOWEV" --allow-lower
+if [ "$BF_RC" = 0 ] && python3 - "$LOWEV" << 'PYEOF'
+import json, sys
+rows = [json.loads(l) for l in open(sys.argv[1]) if l.startswith('{"ts"')]
+assert rows[0]["findings"] == {"critical": 0, "high": 0, "medium": 0, "low": 0}, rows[0]["findings"]
+PYEOF
+then
+  ok "backfill-findings --allow-lower rewrites the row to the recomputed zero"
+else
+  bad "backfill-findings --allow-lower did not rewrite the row (rc=$BF_RC): $BF_OUT"
 fi
 
 echo

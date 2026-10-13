@@ -188,6 +188,24 @@ agentType is not in scope (not script-author/script-reviewer, or in
 during a full scan. `--quiet` prints nothing on stdout when 0 new events
 are found; the summary line still prints when any are.
 
+Review findings: a reviewer may deliver its report as the `input` of a
+`SubagentHandback` tool_use block instead of a text block; parse_findings
+scores both, per-severity maximum across blocks. One block is scored by
+parse_findings_in_block: a well-formed `FINDINGS: CRITICAL=n HIGH=n
+MEDIUM=n LOW=n` line (the last wins) is the block's whole count and a
+malformed one is ignored; otherwise lines are classified (table rows whose
+first severity cell is exact, numbered or located items with the severity
+after a dash, items opening with the severity, coded "H1." items, list
+items ending "(LOW)"). Headings, fix lists, verdicts and negations count
+nothing; a stated "2 HIGH" is used only when a block holds no finding line.
+
+`backfill-findings --events PATH [--projects-dir DIR] [--dry-run]
+[--allow-lower]` recomputes the findings of every recorded `review` row
+from its transcript and rewrites only rows that differ, atomically. A row
+holding a non-zero count is not lowered without --allow-lower; a row whose
+transcript is not on this machine is skipped and counted. `extract` never
+revisits a recorded key, so this is the only way an old row is corrected.
+
 Exit codes: 0 success, 2 a validation failure (bad input, printed to
 stderr), 1 an unexpected error.
 """
@@ -198,6 +216,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -376,21 +395,45 @@ FAIL_RESULT_RE = re.compile(r"SELFTEST FAILED|FAIL|found issue|error:")
 # store-wide the moment the bare word appears in ordinary successful output.
 # This widens only "error:", only for build_invoke_events.
 INVOKE_ERROR_CI_RE = re.compile(r"error:", re.IGNORECASE)
-FINDING_RE = re.compile(r"(?<![A-Za-z])(CRITICAL|HIGH|MEDIUM|LOW)(?![A-Za-z])")
-# Negation words must be WHOLE words immediately preceding the token, or
-# "techno HIGH severity finding" reads as negated because "techno" ends in "no".
-NEGATION_RE = re.compile(
-    r"(?<![A-Za-z0-9_])(?:no|zero|none|0)\s*$", re.IGNORECASE
+# Review-report line classification (see the module docstring, "Review findings"). Never add re.IGNORECASE to a severity pattern.
+SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+_SEV = r"(CRITICAL|HIGH|MEDIUM|LOW)"
+_DASH = r"(?:\u2014|\u2013|--)"
+_SEV_AFTER_DASH = r"\s*(?:\*\*)?" + _SEV + r"(?![A-Za-z])"
+_LOCATION = r"(?:(?:[\w.~-]+/)+[\w.-]+|[\w.-]+\.(?:sh|py|json|md|alloy|ya?ml|tf|caddy|tpl|env|bats))(?::\d+(?:[-,:]\d+)*)?"
+TALLY_RE = re.compile(
+    r"^\s*(?:\*\*|`)?FINDINGS:\s*CRITICAL=(\d+)\s+HIGH=(\d+)\s+MEDIUM=(\d+)\s+LOW=(\d+)\s*(?:\*\*|`)?\s*$"
 )
-# "2 HIGH" means TWO findings. The digit run must not be glued to a preceding
-# letter/digit/underscore, or "line2 HIGH" reads "2" as a count.
-COUNT_PREFIX_RE = re.compile(r"(?<![A-Za-z0-9_])(\d+)\s*$")
-
-# For line_is_finding_shaped(): a prose mention like "the HIGH finding" must
-# NOT count. PATH_TOKEN_RE matches "path:line — SEVERITY — ...";
-# LIST_SEVERITY_RE matches a bare bullet/heading finding line.
-PATH_TOKEN_RE = re.compile(r"[A-Za-z0-9_./-]+\.(?:sh|py|json|md)(?::\d+)?")
-LIST_SEVERITY_RE = re.compile(r"^\s*(?:[-*\d.]+\s*)?(?:\*\*)?(?:CRITICAL|HIGH|MEDIUM|LOW)\b")
+MD_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
+BOLD_LABEL_RE = re.compile(r"^\s*\*\*[^*|]{1,100}\*\*\s*:?\s*$")
+COLON_LABEL_RE = re.compile(r"^\s*[^\W\d_][^|]{0,100}:\s*$")
+LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)]|[A-Z]{1,2}\d+[.)])\s+")
+RESTATING_SECTION_RE = re.compile(
+    r"\bblocking\b|\bblockers?\b|before this (?:can )?ship|\bfix(?:es)?\b|\bverdict\b|\bnothing\b|\bclean\b"
+    r"|\bchecked\b|\bno findings\b|\bruled out\b",
+    re.IGNORECASE,
+)
+FINDINGS_SECTION_RE = re.compile(r"^\W*(?:\w+\s+){0,2}findings?\b", re.IGNORECASE)
+HEADING_RE = re.compile(
+    r"^\s*(?:#{1,6}\s+(?:\*\*)?(?:CRITICAL|HIGH|MEDIUM|LOW)\b.*"
+    r"|(?:\*\*)?(?:CRITICAL|HIGH|MEDIUM|LOW)(?:\s*\([^)]*\))?\s*:?\s*(?:\*\*)?\s*:?\s*)$"
+)
+NUMBERED_FINDING_RE = re.compile(
+    r"^\s*(?:[-*+]\s+)?(?:\*\*)?[A-Z]{0,2}\d+[.)]\s+.*?" + _DASH + _SEV_AFTER_DASH
+)
+LOCATED_FINDING_RE = re.compile(
+    r"^\s*(?:[-*+>]\s+)?[`*]*" + _LOCATION + r"(?:(?!\u2014|\u2013|--).){0,80}?" + _DASH + _SEV_AFTER_DASH
+)
+SEVERITY_FIRST_RE = re.compile(
+    r"^\s*(?:(?:[-*+]|\d+[.)]|[A-Z]{1,2}\d+[.)])\s+)?(?:\*\*)?" + _SEV
+    + r"(?:\*\*|(?=\s*(?::|" + _DASH + r"|-\s|\(|`|\[|$)))"
+)
+TRAILING_SEVERITY_RE = re.compile(r"\((CRITICAL|HIGH|MEDIUM|LOW)\)[.;]?\s*$")
+SEVERITY_PAIR_RE = re.compile(r"^/(CRITICAL|HIGH|MEDIUM|LOW)(?![A-Za-z])")
+TRAILING_NEGATION_RE = re.compile(r"^[\s:\u2014\u2013(*-]*(?:none|nil|0|n/a|no)\b", re.IGNORECASE)
+CODED_FINDING_RE = re.compile(r"^\s*(?:[-*+]\s+)?(?:\*\*)?([CHML])\d+\.\s")
+CODED_SEVERITY = {"C": "critical", "H": "high", "M": "medium", "L": "low"}
+SUMMARY_PAIR_RE = re.compile(r"(?<![A-Za-z0-9_.])(\d+)\s+(CRITICAL|HIGH|MEDIUM|LOW)(?![A-Za-z])")
 
 REVIEW_CAUSE_RE = re.compile(r"review|finding|CRITICAL|HIGH|MEDIUM|reviewer", re.IGNORECASE)
 LINT_CAUSE_RE = re.compile(r"lint|shellcheck|ruff", re.IGNORECASE)
@@ -863,74 +906,170 @@ def infer_cause(prompt):
     return "unknown"
 
 
-def line_is_finding_shaped(line, severity_start):
-    """True if `line` is shaped like an actual finding line for the
-    severity token starting at severity_start, not a prose mention (e.g.
-    "the HIGH finding" or "already sent ... HIGH" must NOT count). One of
-    three shapes qualifies:
-      - a path or path:line token appears BEFORE the severity token on the
-        line (PATH_TOKEN_RE) — the "path:line — SEVERITY — ..." shape;
-      - the line begins with an optional list marker/bold, then the
-        severity token (LIST_SEVERITY_RE) — a bare bullet-style finding;
-      - an explicit stated count immediately precedes the token ("2
-        HIGH") — COUNT_PREFIX_RE, same signal parse_findings_in_block
-        already uses to read the count itself."""
-    prefix = line[:severity_start]
-    if PATH_TOKEN_RE.search(prefix):
-        return True
-    if LIST_SEVERITY_RE.match(line):
-        return True
-    preceding = line[max(0, severity_start - 12):severity_start]
-    if COUNT_PREFIX_RE.search(preceding):
-        return True
-    return False
+def table_row_severity(line):
+    """Return (severity, count) for a markdown table row whose first
+    severity-token cell is exactly a severity ("| HIGH | path | ... |" or
+    "| 3 | HIGH | ..."), else None. A row holding only the severity and one
+    integer ("| HIGH | 2 |") is a summary row and counts as that integer."""
+    s = line.strip()
+    if not s.startswith("|"):
+        return None
+    cells = [c.strip().strip("*`").strip() for c in s.strip("|").split("|")]
+    for i, cell in enumerate(cells):
+        m = re.match(r"^" + _SEV + r"(?:\s*\([^)]*\))?$", cell)
+        if m:
+            rest = [c for j, c in enumerate(cells) if j != i and c]
+            if len(rest) == 1 and rest[0].isdigit():
+                return m.group(1), int(rest[0])
+            return m.group(1), 1
+    return None
+
+
+def item_severity(line):
+    """Return the severity token of a FINDING LINE, else None: a numbered
+    item with the severity after its dash, a location-first
+    "path:line — SEV —" line, an item opening with its severity word, or a
+    coded "H1." item. Prose that merely mentions a severity is not one."""
+    body = re.sub(r"^\s{0,3}#{1,6}\s+", "", line)
+    m = SEVERITY_FIRST_RE.match(body)
+    if m and TRAILING_NEGATION_RE.match(body[m.end():]):
+        return None
+    m = m or NUMBERED_FINDING_RE.match(body) or LOCATED_FINDING_RE.match(body)
+    if m:
+        sev = m.group(1)
+        pair = SEVERITY_PAIR_RE.match(body[m.end(1):])
+        if pair and SEVERITIES.index(pair.group(1)) < SEVERITIES.index(sev):
+            sev = pair.group(1)
+        return sev
+    coded = CODED_FINDING_RE.match(body)
+    if coded:
+        return CODED_SEVERITY[coded.group(1)].upper()
+    trailing = TRAILING_SEVERITY_RE.search(body)
+    if trailing and LIST_ITEM_RE.match(body):
+        return trailing.group(1)
+    return None
+
+
+def section_of(line):
+    """Return (level, text) when `line` opens a section: a markdown heading
+    (level 1-6) or a bold-only / colon-ending label line (level 7), else None."""
+    m = MD_HEADING_RE.match(line)
+    if m:
+        return len(m.group(1)), m.group(2)
+    if LIST_ITEM_RE.match(line):
+        return None
+    if BOLD_LABEL_RE.match(line) or COLON_LABEL_RE.match(line):
+        return 7, line.strip()
+    return None
+
+
+def tally_counts(text):
+    """Return the counts of the LAST well-formed tally line in `text`
+    ("FINDINGS: CRITICAL=0 HIGH=1 MEDIUM=2 LOW=3"), or None."""
+    found = None
+    for line in text.splitlines():
+        m = TALLY_RE.match(line)
+        if m:
+            found = dict(zip(("critical", "high", "medium", "low"), (int(g) for g in m.groups())))
+    return found
 
 
 def parse_findings_in_block(text):
-    """Count CRITICAL/HIGH/MEDIUM/LOW findings in ONE text block. EVERY
-    severity token on a line is evaluated for its own negation
-    independently (taking only the first token per line would undercount
-    a summary line naming several severities). A token preceded within 12
-    chars by a WHOLE-WORD negation (no/0/zero/none) is skipped entirely —
-    see NEGATION_RE. A token whose line is not finding-shaped (see
-    line_is_finding_shaped) is also skipped — a prose mention of a
-    severity word is not a finding. Otherwise, a stated NUMBER
-    immediately before the token is read as that many findings (e.g. "2
-    HIGH" -> +2, not +1); with no such number, a bare occurrence counts
-    as 1."""
+    """Count CRITICAL/HIGH/MEDIUM/LOW findings in ONE block of text. A block
+    with a well-formed tally line takes its counts from that line alone;
+    otherwise each line is classified (module docstring, "Review findings")
+    and a count comes only from a finding line, never from a sentence that
+    mentions a severity."""
     counts = zero_findings()
     if not text:
         return counts
+    tally = tally_counts(text)
+    if tally is not None:
+        return tally
+    summary = zero_findings()
+    skip = None
+    blank = False
+    items = 0
     for line in text.splitlines():
-        for m in FINDING_RE.finditer(line):
-            start = m.start()
-            preceding = line[max(0, start - 12):start]
-            if NEGATION_RE.search(preceding):
-                continue
-            if not line_is_finding_shaped(line, start):
-                continue
-            count_m = COUNT_PREFIX_RE.search(preceding)
-            counts[m.group(1).lower()] += int(count_m.group(1)) if count_m else 1
+        if not line.strip():
+            blank = True
+            continue
+        sect = section_of(line)
+        if sect is not None and (HEADING_RE.match(line) or item_severity(line) is None):
+            level, title = sect
+            if skip is not None and (skip[0] == 7 or level <= skip[0]):
+                skip = None
+            if not HEADING_RE.match(line) and RESTATING_SECTION_RE.search(title):
+                exempt = FINDINGS_SECTION_RE.match(title) and not re.search(r"\bno findings\b", title, re.IGNORECASE)
+                if not exempt:
+                    skip = (level, title)
+            blank = False
+            continue
+        if skip is not None and skip[0] == 7 and blank and not LIST_ITEM_RE.match(line):
+            skip = None
+        blank = False
+        if skip is not None:
+            continue
+        if HEADING_RE.match(line):
+            continue
+        row = table_row_severity(line)
+        if row is not None:
+            counts[row[0].lower()] += row[1]
+            items += row[1]
+            continue
+        sev = item_severity(line)
+        if sev is not None:
+            counts[sev.lower()] += 1
+            items += 1
+            continue
+        for m in SUMMARY_PAIR_RE.finditer(line):
+            key = m.group(2).lower()
+            summary[key] = max(summary[key], int(m.group(1)))
+    if items == 0:
+        return summary
     return counts
+
+
+def iter_strings(value):
+    """Yield every string inside a JSON value, recursing through dicts and lists."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            for s in iter_strings(v):
+                yield s
+    elif isinstance(value, list):
+        for v in value:
+            for s in iter_strings(v):
+                yield s
 
 
 def parse_findings(folded_turns):
     """Count CRITICAL/HIGH/MEDIUM/LOW findings across an ENTIRE subagent
-    transcript, not just its last text block (a reviewer resumed via
-    SendMessage for a re-verify may end with a "PASS/PASS" block carrying
-    no severity tokens at all — taking only the last block would silently
-    lose the original report's real findings). Every {"type":"text"}
-    block across every folded turn is scored independently via
-    parse_findings_in_block, and the PER-SEVERITY MAX across blocks is
-    returned — not the sum, so a resumed agent's second reply (which
-    often repeats or partially restates the same findings) never
-    double-counts on top of the original report."""
+    transcript, not just its last text block (live-backfill finding,
+    HIGH, 2026-09-10: a reviewer resumed via SendMessage for a re-verify
+    ends with a "PASS/PASS" block carrying no severity tokens at all —
+    taking only the last block silently lost the original report's real
+    findings). Every {"type":"text"} block across every folded turn is
+    scored independently via parse_findings_in_block — as is every string
+    in the input of a SubagentHandback tool_use block, which is where a
+    reviewer's report lives since ~2026-09-15 — and the PER-SEVERITY
+    MAX across blocks is returned — not the sum, so a resumed agent's
+    second reply (which often repeats or partially restates the same
+    findings) never double-counts on top of the original report."""
     best = zero_findings()
     for t in folded_turns:
         for block in t["content"]:
-            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
-                block_counts = parse_findings_in_block(block["text"])
-                for key, value in block_counts.items():
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and isinstance(block.get("text"), str):
+                texts = [block["text"]]
+            elif block.get("type") == "tool_use" and block.get("name") == "SubagentHandback":
+                texts = list(iter_strings(block.get("input")))
+            else:
+                continue
+            for text in texts:
+                for key, value in parse_findings_in_block(text).items():
                     if value > best[key]:
                         best[key] = value
     return best
@@ -2128,6 +2267,131 @@ def cmd_backfill_script_paths(args):
     )
 
 
+AGENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def fmt_findings(f):
+    return "%d/%d/%d/%d" % tuple(int(f.get(k) or 0) for k in ("critical", "high", "medium", "low"))
+
+
+def findings_would_lower(old, new):
+    """True when `old` holds a non-zero count and `new` is lower in any severity."""
+    if not isinstance(old, dict):
+        return False
+    keys = ("critical", "high", "medium", "low")
+    vals = {k: int(old.get(k) or 0) for k in keys}
+    if not any(vals.values()):
+        return False
+    return any(int(new.get(k) or 0) < vals[k] for k in keys)
+
+
+def recompute_review_findings(row, projects_dir, cache):
+    """Return the findings dict recomputed from this review row's transcript,
+    or None when the transcript is not under projects_dir or cannot be read.
+    A session match wins over the first of several same-id transcripts."""
+    agent_id = row.get("agent_id")
+    if not isinstance(agent_id, str) or not AGENT_ID_RE.match(agent_id):
+        return None
+    cache_key = (agent_id, row.get("session"))
+    if cache_key in cache:
+        return cache[cache_key]
+    result = None
+    try:
+        matches = find_subagent_paths(projects_dir, agent_id)
+    except ValidationError:
+        matches = []
+    if matches:
+        chosen = next((m for m in matches if m[1] == row.get("session")), matches[0])
+        warnings = []
+        folded = fold_turns(chosen[4], warnings)
+        if not any("ERROR reading file" in w for w in warnings):
+            result = parse_findings(folded)
+    cache[cache_key] = result
+    return result
+
+
+def cmd_backfill_findings(args):
+    """Recompute `findings` of every `review` row in args.events from the
+    agent's transcript under --projects-dir and rewrite a row only when the
+    result differs. A row holding a non-zero count is never lowered unless
+    args.allow_lower: the line scorer undercounts. Every other line is
+    copied byte-for-byte; the file is replaced atomically, and not at all
+    when it changed while being read (a hook appends to it)."""
+    if not os.path.isfile(args.events):
+        raise ValidationError("--events file does not exist: %s" % args.events)
+    if not os.path.isdir(args.projects_dir):
+        raise ValidationError("--projects-dir is not a directory: %s" % args.projects_dir)
+
+    before = os.stat(args.events)
+    with open(args.events, "rb") as fh:
+        pieces = fh.read().split(b"\n")
+
+    out = []
+    examined = changed = unchanged = skipped = refused = 0
+    cache = {}
+    for raw in pieces:
+        row = None
+        if raw.strip():
+            try:
+                row = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                row = None
+        if not isinstance(row, dict) or row.get("event") != "review":
+            out.append(raw)
+            continue
+        examined += 1
+        new = recompute_review_findings(row, args.projects_dir, cache)
+        if new is None:
+            skipped += 1
+            out.append(raw)
+            continue
+        old = row.get("findings")
+        if old == new:
+            unchanged += 1
+            out.append(raw)
+            continue
+        if not args.allow_lower and findings_would_lower(old, new):
+            refused += 1
+            out.append(raw)
+            continue
+        changed += 1
+        print("%s %s %s %s -> %s" % (
+            str(row.get("ts") or "-")[:10], row.get("script") or "-", row.get("agent_id"),
+            fmt_findings(old if isinstance(old, dict) else {}), fmt_findings(new)))
+        row["findings"] = new
+        out.append(json.dumps(row, ensure_ascii=False).encode("utf-8"))
+
+    summary = (
+        "examined %d review row(s): %d changed, %d unchanged, %d skipped (no transcript on this "
+        "machine), %d refused (would lower a non-zero count; --allow-lower overrides); "
+        "every other line passed through byte-identical" % (examined, changed, unchanged, skipped, refused)
+    )
+    if args.dry_run:
+        print("# backfill-findings (dry-run): %s; nothing written" % summary)
+        return
+    if not changed:
+        print("# backfill-findings: %s; no rows changed, file untouched" % summary)
+        return
+
+    after = os.stat(args.events)
+    if (after.st_size, after.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
+        raise ValidationError("%s changed while it was being read; nothing written, run again" % args.events)
+    directory = os.path.dirname(os.path.abspath(args.events))
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".backfill-findings.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(b"\n".join(out))
+            fh.flush()
+            os.fsync(fh.fileno())
+        shutil.copymode(args.events, tmp_path)
+        os.replace(tmp_path, args.events)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+    print("# backfill-findings: %s" % summary)
+
+
 def load_events(events_path, script_filter, since, until, warnings):
     if not os.path.isfile(events_path):
         raise ValidationError("--events file does not exist: %s" % events_path)
@@ -2677,6 +2941,19 @@ def parse_args(argv):
     p_backfill.add_argument("--events", required=True)
     p_backfill.add_argument("--dry-run", action="store_true", dest="dry_run")
 
+    p_findings = sub.add_parser(
+        "backfill-findings",
+        help="recompute the findings of every recorded review row from its transcript and "
+             "rewrite only the rows that differ (rows without a transcript here are skipped)",
+    )
+    p_findings.add_argument("--events", required=True)
+    p_findings.add_argument("--projects-dir", default=os.path.expanduser("~/.claude/projects"))
+    p_findings.add_argument("--allow-lower", action="store_true", dest="allow_lower",
+                            help="also rewrite a row that holds a non-zero count when the "
+                                 "recomputed count is lower (default: such rows are left alone)")
+    p_findings.add_argument("--dry-run", action="store_true", dest="dry_run",
+                            help="print one line per row that would change, write nothing")
+
     return parser.parse_args(argv)
 
 
@@ -2703,6 +2980,8 @@ def main(argv):
             cmd_status_durations(args)
         elif args.cmd == "backfill-script-paths":
             cmd_backfill_script_paths(args)
+        elif args.cmd == "backfill-findings":
+            cmd_backfill_findings(args)
         else:
             raise ValidationError("unknown subcommand: %s" % args.cmd)
     except ValidationError as exc:
