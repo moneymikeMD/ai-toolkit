@@ -733,6 +733,23 @@ into a generic failure would throw it away.
 `--emit-json -` writes the payload to stdout, which moves the per-repo table
 to stderr so it cannot corrupt it. That is what makes the pipeline form work.
 
+## decisions
+
+`scripts/decisions.sh` keeps one record per decision under `docs/decisions.d/<YYYY-MM-DD>-<slug>.md`. There is no `docs/decisions.md` and no generated index; lookup is grep over the directory.
+
+```bash
+decisions.sh add --root REPO --title T --decision D --why W --cost C [--supersedes docs/decisions.d/OLD.md]
+decisions.sh lint --root REPO
+decisions.sh list --root REPO
+```
+
+`add` requires all four of title, decision, why and cost, refuses a slug that already exists under any date, and dates in local time. Supersession is a `supersedes:` frontmatter path, not a sequence number, so two machines
+adding on the same day cannot collide on a counter. `lint` fails if `docs/decisions.md` exists, checks frontmatter and the Decision/Why/Cost sections, and resolves every `supersedes` path and every relative Markdown link
+into `docs/decisions.d/` from any `*.md` in the repo. It needs no network and no sibling checkout, so a static lint lane can run it. A legacy record may carry `0000-00-00` as its date, and `unrecorded` as its Why or Cost
+only with `migrated: true` in its frontmatter.
+
+`--root` works exactly as in `known-issue.sh`: cwd is the default, a set-but-empty or non-git `--root` fails loudly, and every caller should pass it.
+
 ## release MCP server
 
 The `release` stdio MCP server (sourced from a private dotfiles repo's
