@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.1](https://github.com/moneymikeMD/ai-toolkit/compare/v1.10.0...v1.10.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* **scripts:** decisions.sh parses under bash 3.2 (NWM-202) ([#79](https://github.com/moneymikeMD/ai-toolkit/issues/79)) ([3dcdde7](https://github.com/moneymikeMD/ai-toolkit/commit/3dcdde713d5c574e179844ee231dcc836a0d60fc))
+
 ## [1.10.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.9.1...v1.10.0) (2026-10-16)
 
 
