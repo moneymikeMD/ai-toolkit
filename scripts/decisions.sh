@@ -161,7 +161,9 @@ cmd_add() {
     echo "$file"
 }
 
-LINT_PY=$(cat <<'PY'
+# Not a command substitution around the heredoc: bash 3.2 mis-parses a backtick run inside one.
+run_py() {
+python3 -I - "$@" <<'PY'
 import json, os, re, subprocess, sys
 
 root, mode = sys.argv[1], sys.argv[2]
@@ -287,10 +289,10 @@ if errors:
     sys.exit(1)
 print(f"ok: {len(records)} decision record(s)")
 PY
-)
+}
 
 case "$SUB" in
     add) cmd_add "$@" ;;
-    lint) [ $# -eq 0 ] || die "lint: unexpected argument: $1"; python3 -I -c "$LINT_PY" "$ROOT" lint ;;
-    list) [ $# -eq 0 ] || die "list: unexpected argument: $1"; python3 -I -c "$LINT_PY" "$ROOT" list ;;
+    lint) [ $# -eq 0 ] || die "lint: unexpected argument: $1"; run_py "$ROOT" lint ;;
+    list) [ $# -eq 0 ] || die "list: unexpected argument: $1"; run_py "$ROOT" list ;;
 esac
