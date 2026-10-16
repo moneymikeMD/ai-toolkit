@@ -266,6 +266,27 @@ if [ "$RC" = 0 ] && printf '%s' "$OUT" | grep -q 'decisions.sh add --title'; the
 run bogus
 if [ "$RC" != 0 ]; then ok "unknown subcommand fails"; else bad "unknown subcommand accepted"; fi
 
+# ---- 16: bash 3.2 guard. No bash 3.2 on Linux CI, so check the construct that broke it:
+# a heredoc opened inside $( ) whose body holds a backtick (NWM-202 follow-up).
+bash32_hazard() {
+    awk '
+        /\$\([^)]*<</ { match($0, /<<-?[ \t]*[\x27"]?[A-Za-z_]+/); tag = substr($0, RSTART, RLENGTH)
+                         gsub(/<<-?[ \t]*[\x27"]?/, "", tag); inhd = 1; next }
+        inhd && $0 == tag { inhd = 0; next }
+        inhd && /`/ { print FILENAME ":" NR; bad = 1 }
+        END { exit bad ? 0 : 1 }
+    ' "$1"
+}
+printf 'X=$(cat <<\x27EOF\x27\nre = "`{3,}"\nEOF\n)\n' > "$WORK/hazard.sh"
+printf 'X=$(cat <<\x27EOF\x27\nplain\nEOF\n)\n' > "$WORK/fine.sh"
+if bash32_hazard "$WORK/hazard.sh" >/dev/null && ! bash32_hazard "$WORK/fine.sh" >/dev/null; then
+    ok "bash32 guard flags a backtick in a heredoc inside \$( ) and passes a plain one"
+else bad "bash32 guard self-check"; fi
+if bash32_hazard "$DECISIONS" >/dev/null; then bad "decisions.sh has a backtick heredoc inside \$( ): bash 3.2 cannot parse it"
+else ok "decisions.sh has no backtick heredoc inside a command substitution"; fi
+if grep -nE '\$\([^)]*<<' "$DECISIONS" >/dev/null; then bad "decisions.sh opens a heredoc inside \$( )"
+else ok "decisions.sh opens no heredoc inside a command substitution"; fi
+
 echo "---"
 echo "passed: $PASS failed: $FAIL"
 [ "$FAIL" = 0 ]
