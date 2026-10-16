@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.9.1...v1.10.0) (2026-10-16)
+
+
+### Features
+
+* **scripts:** decisions.sh writes one record per decision with no index (NWM-202) ([#77](https://github.com/moneymikeMD/ai-toolkit/issues/77)) ([f6bb9fe](https://github.com/moneymikeMD/ai-toolkit/commit/f6bb9fed25e6c8003b6dbf3bdde7f8368086ed66))
+
 ## [1.9.1](https://github.com/moneymikeMD/ai-toolkit/compare/v1.9.0...v1.9.1) (2026-10-13)
 
 
