@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.10.1...v1.11.0) (2026-10-17)
+
+
+### Features
+
+* **actions:** notify-buzz posts to a Buzz webhook workflow (LAB-622) ([#82](https://github.com/moneymikeMD/ai-toolkit/issues/82)) ([02a9e82](https://github.com/moneymikeMD/ai-toolkit/commit/02a9e82a9f426479cd79a2e6d8cacbdad96ce950))
+
 ## [1.10.1](https://github.com/moneymikeMD/ai-toolkit/compare/v1.10.0...v1.10.1) (2026-10-16)
 
 
