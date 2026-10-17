@@ -1,0 +1,21 @@
+name: notify-buzz-test
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: Message body to post into the scratch Buzz channel.
+        required: false
+        default: ai-toolkit notify-buzz dispatch test
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./actions/notify-buzz
+        with:
+          url: ${{ secrets.BUZZ_TEST_HOOK_URL }}
+          secret: ${{ secrets.BUZZ_TEST_HOOK_SECRET }}
+          title: notify-buzz test from ${{ github.repository }}
+          message: ${{ inputs.message }}

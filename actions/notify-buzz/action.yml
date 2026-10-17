@@ -1,0 +1,39 @@
+name: notify-buzz
+description: Post a message into a Buzz channel through a Buzz webhook workflow. Never fails the caller's job on delivery problems.
+author: Mike Garrett
+
+inputs:
+  url:
+    description: Full hook URL, https://<relay>/hooks/<workflow-id>. Pass it from a secret.
+    required: true
+  secret:
+    description: The workflow's webhook secret. Pass it from a secret.
+    required: true
+  status:
+    description: Value of {{trigger.status}}; consumer workflows filter on it.
+    required: false
+    default: "firing"
+  title:
+    description: Value of {{trigger.title}}.
+    required: true
+  message:
+    description: Value of {{trigger.message}}.
+    required: false
+    default: ""
+  link:
+    description: Value of {{trigger.externalURL}}. Defaults to the URL of the current run.
+    required: false
+    default: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        BUZZ_URL: ${{ inputs.url }}
+        BUZZ_SECRET: ${{ inputs.secret }}
+        BUZZ_STATUS: ${{ inputs.status }}
+        BUZZ_TITLE: ${{ inputs.title }}
+        BUZZ_MESSAGE: ${{ inputs.message }}
+        BUZZ_LINK: ${{ inputs.link }}
+      run: bash "${{ github.action_path }}/notify-buzz.sh"
