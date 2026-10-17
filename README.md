@@ -63,6 +63,21 @@ python3 actions/comment-lint/comment-lint.py --stats     # per-file ratios, no g
 ./actions/comment-lint/comment-lint-selftest.sh          # 13 fixture assertions
 ```
 
+## notify-buzz
+
+Posts a message into a Buzz channel through a Buzz webhook workflow, and never
+fails the calling job when Buzz is unreachable. Inputs, a post-on-failure
+example and the selftest are in [actions/notify-buzz/README.md](actions/notify-buzz/README.md).
+
+```yaml
+- if: failure()
+  uses: moneymikeMD/ai-toolkit/actions/notify-buzz@v1
+  with:
+    url: ${{ secrets.BUZZ_HOOK_URL }}
+    secret: ${{ secrets.BUZZ_HOOK_SECRET }}
+    title: build failed
+```
+
 ## no-personal-paths
 
 Fails a build when a tracked file names somebody's home directory. Two bugs at
