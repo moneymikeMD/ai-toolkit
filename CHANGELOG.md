@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.1](https://github.com/moneymikeMD/ai-toolkit/compare/v1.11.0...v1.11.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **release-publish:** accept owner-authored release-please PRs ([#84](https://github.com/moneymikeMD/ai-toolkit/issues/84)) ([1a08aee](https://github.com/moneymikeMD/ai-toolkit/commit/1a08aeedcbb06e8f40e2e203a19de87589fa36f8))
+
 ## [1.11.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.10.1...v1.11.0) (2026-10-17)
 
 
