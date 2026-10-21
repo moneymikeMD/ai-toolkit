@@ -49,7 +49,7 @@ fi
 
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
     case "$*" in
-        *"headRefName,title,author"*)
+        *"state,headRefName,title"*)
             printf '%s\n' "$RELPUB_STUB_PR_VIEW_TSV"
             exit 0
             ;;
@@ -269,7 +269,7 @@ check "the manifest is read at the repo's default branch" 1 "$(grep -c 'release-
 reset_scenario
 RELPUB_STUB_MANIFEST_JSON=$(printf '%s' '{".": "1.7.0", "plugins/work-order-jira": "0.5.1"}')
 RELPUB_STUB_CONFIG_JSON=$(printf '%s' '{"packages": {".": {"release-type": "simple"}, "plugins/work-order-jira": {"release-type": "simple", "component": "work-order-jira", "tag-separator": "--"}}}')
-RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--work-order-jira\tchore(main): release work-order-jira 0.6.0\ttrue'
+RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--work-order-jira\tchore(main): release work-order-jira 0.6.0'
 export RELPUB_STUB_MANIFEST_JSON RELPUB_STUB_CONFIG_JSON RELPUB_STUB_PR_VIEW_TSV
 rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --pr 54 --wait-timeout-s 5)"
 check "component PR: compares against the component's manifest key" 0 "$rc"
@@ -282,7 +282,7 @@ check "component PR: does not move the root's floating major" 0 "$(tagwrite_call
 reset_scenario
 RELPUB_STUB_MANIFEST_JSON=$(printf '%s' '{".": "1.7.0", "plugins/tool": "2.0.0"}')
 RELPUB_STUB_CONFIG_JSON=$(printf '%s' '{"packages": {".": {}, "plugins/tool": {"release-type": "simple"}}}')
-RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--tool\tchore(main): release tool 2.1.0\ttrue'
+RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--tool\tchore(main): release tool 2.1.0'
 export RELPUB_STUB_MANIFEST_JSON RELPUB_STUB_CONFIG_JSON RELPUB_STUB_PR_VIEW_TSV
 rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --pr 56 --wait-timeout-s 5)"
 check "component without tag-separator: resolves by path basename" 0 "$rc"
@@ -291,7 +291,7 @@ check "component without tag-separator: waits for the '-' tag" "tool-v2.1.0" "$(
 # Two packages naming one component is an ambiguity, refused like two PRs.
 reset_scenario
 RELPUB_STUB_CONFIG_JSON=$(printf '%s' '{"packages": {"a/tool": {"component": "tool"}, "b/tool": {}}}')
-RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--tool\tchore(main): release tool 2.1.0\ttrue'
+RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--tool\tchore(main): release tool 2.1.0'
 export RELPUB_STUB_CONFIG_JSON RELPUB_STUB_PR_VIEW_TSV
 rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --pr 57 --dry-run)"
 check "ambiguous component: exits 1" 1 "$rc"
@@ -299,7 +299,7 @@ check "ambiguous component: lists both packages" 2 "$(grep -cE '^  (a|b)/tool$' 
 
 # A head that ends at --components-- is malformed, not a root release.
 reset_scenario
-RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--\tchore(main): release 1.4.0\ttrue'
+RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--\tchore(main): release 1.4.0'
 export RELPUB_STUB_PR_VIEW_TSV
 rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --pr 58 --dry-run)"
 check "empty component name: exits 1" 1 "$rc"
@@ -307,7 +307,7 @@ check "empty component name: says so" 1 "$(grep -c 'empty component' "$WORK/stde
 
 # A component the config does not name is refused, not compared to the root.
 reset_scenario
-RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--ghost\tchore(main): release ghost 0.6.0\ttrue'
+RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main--components--ghost\tchore(main): release ghost 0.6.0'
 export RELPUB_STUB_PR_VIEW_TSV
 rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --pr 55 --dry-run)"
 check "unknown component: exits 1" 1 "$rc"
@@ -344,11 +344,19 @@ check "two open release-please PRs: message says disambiguate" 1 "$(grep -c -- '
 
 # --pr overrides discovery: gh pr list is never called.
 reset_scenario
-RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main\tchore(main): release 1.4.0\ttrue'
+RELPUB_STUB_PR_VIEW_TSV=$'OPEN\trelease-please--branches--main\tchore(main): release 1.4.0'
 export RELPUB_STUB_PR_VIEW_TSV
 rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --pr 50 --wait-timeout-s 5)"
 check "--pr override: exits 0" 0 "$rc"
 check "--pr override: never calls pr list" 0 "$(prlist_calls)"
+
+# --pr on a branch release-please did not open is refused before merging.
+reset_scenario
+RELPUB_STUB_PR_VIEW_TSV=$'OPEN\tchore/release-1.4.0\tchore: release 1.4.0'
+export RELPUB_STUB_PR_VIEW_TSV
+rc="$(run_sut bash "$SUT" minor --repo test-owner/test-repo --pr 51 --wait-timeout-s 5)"
+check "--pr non-release-please branch: exits 1" 1 "$rc"
+check "--pr non-release-please branch: never merges" 0 "$(merge_calls)"
 
 # Level mismatch: requested major, PR computes to minor. Refused before merging.
 reset_scenario
