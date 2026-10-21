@@ -8,10 +8,9 @@
 # left to a sentence in a handoff document.
 #
 # The merge is delegated to pr-land.sh (next to this script) rather than
-# reimplemented, so the required-check gate has one implementation. A
-# release-please PR is bot-authored and its own workflow run produces zero
-# check-runs (a GITHUB_TOKEN-authored event never creates one); that is
-# pr-land.sh's concern, not this script's.
+# reimplemented, so the required-check gate has one implementation. A PR
+# counts as release-please's by its `release-please--` head branch alone:
+# its author is a bot under GITHUB_TOKEN but the owner under a PAT.
 #
 # If more than one open PR looks like a release-please PR — a sibling
 # package's release PR can be open at the same time, and merging one
@@ -193,17 +192,16 @@ if [ -z "$PR" ]; then
     pr_head="$(printf '%s' "$candidates" | cut -f2)"
     pr_title="$(printf '%s' "$candidates" | cut -f3)"
 else
-    pr_line="$(gh pr view "$PR" --repo "$REPO" --json state,headRefName,title,author \
-        --jq '[.state, .headRefName, .title, (.author.is_bot|tostring)] | @tsv')" || {
+    pr_line="$(gh pr view "$PR" --repo "$REPO" --json state,headRefName,title \
+        --jq '[.state, .headRefName, .title] | @tsv')" || {
         echo "release-publish.sh: could not read PR $PR in $REPO" >&2
         exit 1
     }
     pr_state="$(printf '%s' "$pr_line" | cut -f1)"
     pr_head="$(printf '%s' "$pr_line" | cut -f2)"
     pr_title="$(printf '%s' "$pr_line" | cut -f3)"
-    pr_is_bot="$(printf '%s' "$pr_line" | cut -f4)"
-    if [ "$pr_state" != OPEN ] || [ "$pr_is_bot" != true ] || [ "${pr_head#release-please--}" = "$pr_head" ]; then
-        echo "release-publish.sh: PR $PR in $REPO does not look like an open release-please PR (state=$pr_state, bot=$pr_is_bot, head=$pr_head)" >&2
+    if [ "$pr_state" != OPEN ] || [ "${pr_head#release-please--}" = "$pr_head" ]; then
+        echo "release-publish.sh: PR $PR in $REPO does not look like an open release-please PR (state=$pr_state, head=$pr_head)" >&2
         exit 1
     fi
 fi
