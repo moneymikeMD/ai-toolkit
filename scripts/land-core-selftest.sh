@@ -417,6 +417,178 @@ run --repo "$D/repo" --branch feature --allow-untracked ""
 check "an empty --allow-untracked is refused" 2 "$RC"
 
 echo
+echo "== batch mode (--item) =="
+
+# batchrepo — newrepo plus branches b1, b2, b3, each adding its own file, and
+# an origin post-receive hook that counts pushes into $d/pushes.
+batchrepo() {
+    local d b
+    d=$(newrepo)
+    {
+        for b in b1 b2 b3; do
+            fixture_git "$d/repo" checkout -q -b "$b" main
+            echo "$b" > "$d/repo/$b.txt"
+            fixture_git "$d/repo" add -A
+            fixture_git "$d/repo" commit -qm "$b work"
+        done
+        fixture_git "$d/repo" checkout -q main
+        printf '#!/bin/sh\necho push >> "%s/pushes"\n' "$d" > "$d/origin.git/hooks/post-receive"
+        chmod +x "$d/origin.git/hooks/post-receive"
+    } >/dev/null 2>&1
+    printf '%s' "$d"
+}
+pushes() { [ -f "$1/pushes" ] && wc -l < "$1/pushes" | tr -d ' ' || echo 0; }
+origin_has() { fixture_git "$1/origin.git" cat-file -e "main:$2" 2>/dev/null && echo yes || echo no; }
+branch_kept() { fixture_git "$1/repo" rev-parse --verify --quiet "refs/heads/$2" >/dev/null && echo kept || echo gone; }
+row() { printf '%s\n' "$OUT" | awk -v b="$2" '$1 ~ /^[a-z-]+$/ && $2 == b { print $1 }' | tail -1; }
+
+D=$(newrepo)
+run --repo "$D/repo" --item feature --branch feature
+check "--item with --branch is refused" 2 "$RC"
+run --repo "$D/repo" --item feature --label X
+check "--item with --label is refused" 2 "$RC"
+run --repo "$D/repo" --item feature --item feature
+check "a duplicate item is refused" 2 "$RC"
+run --repo "$D/repo" --item feature --item nope
+check "a missing item branch stops the whole batch" 2 "$RC"
+check "a stopped batch touched nothing" no "$(test -e "$D/repo-land" && echo yes || echo no)"
+
+D=$(batchrepo)
+BEFORE=$(origin_main "$D")
+HOOKLOG="$D/hook.log"
+H=$(hookfile "$D/hook.sh" "echo \"\$1 b=\$LAND_CORE_BRANCH l=\$LAND_CORE_LABEL batch=\${LAND_CORE_BATCH:-}\" >> '$HOOKLOG'")
+run --repo "$D/repo" --item b1:T-1 --item b2:T-2 --dry-run --hook "$H"
+check "batch --dry-run exits 0" 0 "$RC"
+contains "batch --dry-run prints the train" "Plan (batch of 2)" "$OUT"
+check "batch --dry-run calls no hook" no "$(test -e "$HOOKLOG" && echo yes || echo no)"
+check "batch --dry-run pushes nothing" "$BEFORE" "$(origin_main "$D")"
+
+run --repo "$D/repo" --item b1:T-1 --item b2:T-2 --item b3:T-3 --lint-cmd true --hook "$H"
+check "all clean: exit 0" 0 "$RC"
+check "all clean: exactly one push" 1 "$(pushes "$D")"
+check "all clean: b1 landed" landed "$(row "$OUT" b1)"
+check "all clean: b3 landed" landed "$(row "$OUT" b3)"
+check "all clean: every file on origin" "yes yes yes" "$(origin_has "$D" b1.txt) $(origin_has "$D" b2.txt) $(origin_has "$D" b3.txt)"
+check "all clean: three merge commits, in order, labelled" "T-3: merge branch 'b3' into main|T-2: merge branch 'b2' into main|T-1: merge branch 'b1' into main" \
+    "$(fixture_git "$D/origin.git" log --merges --format=%s main | paste -sd'|' -)"
+check "all clean: one lint run" 1 "$(printf '%s\n' "$OUT" | grep -c '^Running true')"
+check "all clean: branches deleted" "gone gone gone" "$(branch_kept "$D" b1) $(branch_kept "$D" b2) $(branch_kept "$D" b3)"
+check "all clean: hook points, post-merge never, post-push per item" \
+    "pre-merge b= l= batch=1|pre-push b= l= batch=1|post-push b=b1 l=T-1 batch=1|post-push b=b2 l=T-2 batch=1|post-push b=b3 l=T-3 batch=1" \
+    "$(paste -sd'|' - < "$HOOKLOG")"
+
+D=$(batchrepo)
+{
+    fixture_git "$D/repo" checkout -q main
+    echo clash > "$D/repo/b2.txt"
+    fixture_git "$D/repo" add -A
+    fixture_git "$D/repo" commit -qm "clash with b2"
+    fixture_git "$D/repo" push -q origin main
+} >/dev/null 2>&1
+rm -f "$D/pushes"
+run --repo "$D/repo" --item b1 --item b2 --item b3 --lint-cmd true
+check "conflict skipped: exit 3 (partial)" 3 "$RC"
+check "conflict skipped: b2 conflict-skipped" conflict-skipped "$(row "$OUT" b2)"
+check "conflict skipped: b1 and b3 landed" "landed landed" "$(row "$OUT" b1) $(row "$OUT" b3)"
+check "conflict skipped: one push" 1 "$(pushes "$D")"
+check "conflict skipped: origin keeps main's b2.txt" clash "$(fixture_git "$D/origin.git" show main:b2.txt)"
+check "conflict skipped: b2 branch kept" kept "$(branch_kept "$D" b2)"
+
+D=$(batchrepo)
+{
+    fixture_git "$D/repo" checkout -q b2
+    echo bad > "$D/repo/bad.txt"
+    fixture_git "$D/repo" add -A
+    fixture_git "$D/repo" commit -qm "b2 breaks lint"
+    fixture_git "$D/repo" checkout -q -b b4 b2
+    echo b4 > "$D/repo/b4.txt"
+    fixture_git "$D/repo" add -A
+    fixture_git "$D/repo" commit -qm "b4 stacked on b2"
+    fixture_git "$D/repo" checkout -q main
+} >/dev/null 2>&1
+run --repo "$D/repo" --item b1 --item b2 --item b3 --item b4 --lint-cmd 'test ! -e bad.txt'
+check "lint bisected: exit 3 (partial)" 3 "$RC"
+check "lint bisected: b2 is the culprit" lint-dropped "$(row "$OUT" b2)"
+check "lint bisected: b4, stacked on b2, is dropped with it" dependent-dropped "$(row "$OUT" b4)"
+check "lint bisected: b1 and b3 landed" "landed landed" "$(row "$OUT" b1) $(row "$OUT" b3)"
+check "lint bisected: bad.txt never reached origin" no "$(origin_has "$D" bad.txt)"
+check "lint bisected: b3.txt reached origin" yes "$(origin_has "$D" b3.txt)"
+check "lint bisected: one push" 1 "$(pushes "$D")"
+check "lint bisected: b2 and b4 branches kept" "kept kept" "$(branch_kept "$D" b2) $(branch_kept "$D" b4)"
+
+D=$(batchrepo)
+BEFORE=$(origin_main "$D")
+run --repo "$D/repo" --item b1 --item b2 --lint-cmd false
+check "red base: exit 1" 1 "$RC"
+check "red base: no item is blamed" "base-red base-red" "$(row "$OUT" b1) $(row "$OUT" b2)"
+check "red base: nothing pushed" "$BEFORE" "$(origin_main "$D")"
+
+D=$(batchrepo)
+BEFORE=$(origin_main "$D")
+run --repo "$D/repo" --item b1 --item b2 --lint-cmd true --hook "$(hookfile "$D/pp.sh" '[ "$1" != pre-push ]')"
+check "pre-push refusal: exit 1" 1 "$RC"
+check "pre-push refusal: nothing pushed" "$BEFORE" "$(origin_main "$D")"
+
+D=$(batchrepo)
+{
+    fixture_git "$D/repo" checkout -q -b b5 b1
+    echo b5 > "$D/repo/b5.txt"
+    fixture_git "$D/repo" add -A
+    fixture_git "$D/repo" commit -qm "b5 stacked on b1"
+    fixture_git "$D/repo" checkout -q main
+} >/dev/null 2>&1
+run --repo "$D/repo" --item b5 --item b1 --lint-cmd true
+check "stacked base listed later: exit 0" 0 "$RC"
+check "stacked base listed later: b1 landed with b5" landed "$(row "$OUT" b1)"
+contains "stacked base listed later: says it has no merge of its own" "no merge commit of its own" "$OUT"
+
+D=$(batchrepo)
+fixture_git "$D/repo" worktree add -q "$D/b2-wt" b2 >/dev/null 2>&1
+echo dirt > "$D/b2-wt/dirt.txt"
+run --repo "$D/repo" --item b1 --item b2 --lint-cmd true
+check "dirty item worktree: exit 3" 3 "$RC"
+check "dirty item worktree: b2 refused" refused "$(row "$OUT" b2)"
+check "dirty item worktree: b1 landed" landed "$(row "$OUT" b1)"
+
+D=$(batchrepo)
+BEFORE=$(origin_main "$D")
+printf '#!/bin/sh\nexit 1\n' > "$D/origin.git/hooks/pre-receive"
+chmod +x "$D/origin.git/hooks/pre-receive"
+PH="$D/post.log"
+run --repo "$D/repo" --item b1 --item b2 --item b3 --lint-cmd true --hook "$(hookfile "$D/ph.sh" "[ \"\$1\" != post-push ] || echo called >> '$PH'")"
+check "push failure: exit 1" 1 "$RC"
+check "push failure: every item push-failed" "push-failed push-failed push-failed" "$(row "$OUT" b1) $(row "$OUT" b2) $(row "$OUT" b3)"
+check "push failure: origin unchanged" "$BEFORE" "$(origin_main "$D")"
+check "push failure: no post-push hook call" no "$(test -e "$PH" && echo yes || echo no)"
+check "push failure: every branch kept" "kept kept kept" "$(branch_kept "$D" b1) $(branch_kept "$D" b2) $(branch_kept "$D" b3)"
+check "push failure: the train stays local, not reset" yes \
+    "$(fixture_git "$D/repo-land" cat-file -e HEAD:b3.txt 2>/dev/null && echo yes || echo no)"
+check "push failure: lock released" no "$(test -e "$D/repo-land.lock" && echo yes || echo no)"
+
+D=$(batchrepo)
+BEFORE=$(origin_main "$D")
+export LAND_CORE_BATCH_MAX_LINTS=2
+run --repo "$D/repo" --item b1 --item b2 --item b3 --lint-cmd false
+unset LAND_CORE_BATCH_MAX_LINTS
+check "lint budget spent: exit 1" 1 "$RC"
+check "lint budget spent: every item lint-unresolved" "lint-unresolved lint-unresolved lint-unresolved" \
+    "$(row "$OUT" b1) $(row "$OUT" b2) $(row "$OUT" b3)"
+check "lint budget spent: exactly 2 lint runs" 2 "$(printf '%s\n' "$OUT" | grep -c '^Running false')"
+check "lint budget spent: origin untouched" "$BEFORE" "$(origin_main "$D")"
+check "lint budget spent: lock released" no "$(test -e "$D/repo-land.lock" && echo yes || echo no)"
+check "lint budget spent: worktree back on the base" "$BEFORE" "$(fixture_git "$D/repo-land" rev-parse HEAD)"
+
+# A red lint that also plants index.lock makes the bisect's rebuild reset
+# fail, which is a die mid-train.
+D=$(batchrepo)
+BEFORE=$(origin_main "$D")
+run --repo "$D/repo" --item b1 --item b2 --lint-cmd 'touch "$(git rev-parse --git-dir)/index.lock"; false'
+check "git failure mid-train: exit 1" 1 "$RC"
+contains "git failure mid-train: names the failed reset" "could not reset the integration worktree to the batch base" "$OUT"
+check "git failure mid-train: origin untouched" "$BEFORE" "$(origin_main "$D")"
+check "git failure mid-train: lock released" no "$(test -e "$D/repo-land.lock" && echo yes || echo no)"
+
+echo
 echo "== what the move must not carry =="
 
 SRC="$(cat "$SUT")"
