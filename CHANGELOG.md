@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.11.1...v1.12.0) (2026-11-08)
+
+
+### Features
+
+* **land-core:** --item batch mode, one merge train, one lint, one push (NWM-205) ([#86](https://github.com/moneymikeMD/ai-toolkit/issues/86)) ([8c6374b](https://github.com/moneymikeMD/ai-toolkit/commit/8c6374b47249b43d52410ee6b6ac0aa1f543ab15))
+
 ## [1.11.1](https://github.com/moneymikeMD/ai-toolkit/compare/v1.11.0...v1.11.1) (2026-10-21)
 
 
