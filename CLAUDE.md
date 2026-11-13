@@ -49,9 +49,9 @@ manifest from the named repo's default branch), which merges the release PR via 
 key and moves no tag. `tag-major.sh` refuses to move any name matching `vX.Y.Z` — only the floating major — and moves it through the GitHub Git Data API with a read-back check, because a push's exit
 code does not prove a tag moved.
 
-**The version cap**: no repo in this ecosystem moves past `v1.x` until the owner lifts it. Banned is the *marker* release-please reads as a major bump — a commit or PR-title subject matching
+**The version cap**: no repo in this ecosystem moves past `v1.x` until the owner lifts it; switchtender and night-watchman are outside it. Banned is the *marker* release-please reads as a major bump — a commit or PR-title subject matching
 `^[A-Za-z]+(\([^)]*\))?!:`, or a `BREAKING CHANGE:`/`BREAKING-CHANGE:` footer — not the change itself: ship it as a plain `feat:` and describe the incompatibility in prose. `release-publish.sh`
-enforces the owner-only half in code: it refuses a major release without `--i-am-the-owner`. The `no-major` job here is not required, and not every consuming repo runs one — check a repo's own
+enforces the owner-only half in code: it refuses a major release without `--i-am-the-owner`. Not every consuming repo runs a `no-major` job — check a repo's own
 workflows before assuming it is covered.
 
 ## `scripts/`
