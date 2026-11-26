@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.2](https://github.com/moneymikeMD/ai-toolkit/compare/v1.14.1...v1.14.2) (2026-11-26)
+
+
+### Bug Fixes
+
+* **known-issue:** say a fixed entry is deleted, and add remove to do it ([#96](https://github.com/moneymikeMD/ai-toolkit/issues/96)) ([ad8f438](https://github.com/moneymikeMD/ai-toolkit/commit/ad8f438f5da24fa9cb57968dec841bc046d04ddb))
+
 ## [1.14.1](https://github.com/moneymikeMD/ai-toolkit/compare/v1.14.0...v1.14.1) (2026-11-26)
 
 
