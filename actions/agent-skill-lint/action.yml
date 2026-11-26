@@ -1,0 +1,58 @@
+name: agent-skill-lint
+description: Fail on a fat agent body, an agent body that loads a skill its frontmatter does not list, or an invalid SKILL.md.
+author: Mike Garrett
+
+inputs:
+  agent-roots:
+    description: Space-separated directories of agent .md files.
+    required: false
+    default: ""
+  skill-roots:
+    description: Space-separated directories holding */SKILL.md.
+    required: false
+    default: ""
+  agent-word-cap:
+    description: Maximum words in an agent body, the text after its frontmatter.
+    required: false
+    default: "200"
+  allow:
+    description: JSON file mapping an agent path to the reason it may exceed the word cap.
+    required: false
+    default: ""
+  report-only:
+    description: Report findings without failing the build. A usage error still fails.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        INPUT_AGENT_ROOTS: ${{ inputs.agent-roots }}
+        INPUT_SKILL_ROOTS: ${{ inputs.skill-roots }}
+        INPUT_AGENT_WORD_CAP: ${{ inputs.agent-word-cap }}
+        INPUT_ALLOW: ${{ inputs.allow }}
+        INPUT_REPORT_ONLY: ${{ inputs.report-only }}
+      run: |
+        set -uo pipefail
+        args=(--agent-word-cap "$INPUT_AGENT_WORD_CAP")
+        [ -n "$INPUT_ALLOW" ] && args+=(--allow "$INPUT_ALLOW")
+        read -r -a agent_roots <<<"$INPUT_AGENT_ROOTS"
+        for d in "${agent_roots[@]}"; do args+=(--agent-root "$d"); done
+        read -r -a skill_roots <<<"$INPUT_SKILL_ROOTS"
+        for d in "${skill_roots[@]}"; do args+=(--skill-root "$d"); done
+        if [ "${#agent_roots[@]}" -eq 0 ] && [ "${#skill_roots[@]}" -eq 0 ]; then
+          echo "::error::agent-skill-lint: set agent-roots, skill-roots or both"
+          exit 2
+        fi
+        if python3 "${{ github.action_path }}/agent-skill-lint.py" "${args[@]}"; then
+          status=0
+        else
+          status=$?
+        fi
+        if [ "$INPUT_REPORT_ONLY" = "true" ] && [ "$status" -eq 1 ]; then
+          echo "::notice::agent-skill-lint found violations; report-only is set, not failing the build"
+          exit 0
+        fi
+        exit "$status"
