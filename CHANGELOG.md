@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.1](https://github.com/moneymikeMD/ai-toolkit/compare/v1.14.0...v1.14.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* **eval-weekly:** compare a group baseline row with its cases' mean, and fail a run the ceiling cut short (NWM-273) ([#94](https://github.com/moneymikeMD/ai-toolkit/issues/94)) ([3059a8e](https://github.com/moneymikeMD/ai-toolkit/commit/3059a8e2b0784e04f160d6f893772e0625e222d9))
+
 ## [1.14.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.13.0...v1.14.0) (2026-11-26)
 
 
