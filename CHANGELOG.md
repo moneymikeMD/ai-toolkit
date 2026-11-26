@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.13.0...v1.14.0) (2026-11-26)
+
+
+### Features
+
+* **eval-weekly:** run a plugin's eval suite against its baseline and name every case that fell (NWM-258) ([#92](https://github.com/moneymikeMD/ai-toolkit/issues/92)) ([64879a5](https://github.com/moneymikeMD/ai-toolkit/commit/64879a50242253675c21ed710837e59d567fb191))
+
 ## [1.13.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.12.0...v1.13.0) (2026-11-26)
 
 
