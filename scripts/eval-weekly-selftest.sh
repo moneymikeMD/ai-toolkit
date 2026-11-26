@@ -100,7 +100,26 @@ run --max-cost-usd 3 "$A" "$B"
 A=$(plugin alpha 1 "c1=1.0" "c1=1.0")
 printf '2\n' >"$A/stub-rc"
 run "$A"
-[ "$RC" = 0 ] && ok "eval exit 2 (ceiling hit) with full scores is judged on its scores" || bad "rc2: rc=$RC $OUT"
+[ "$RC" = 1 ] && has "ceiling was reached" && has "alpha: eval exited 2" \
+    && ok "eval exit 2 (its ceiling reached) fails the run and says so" || bad "rc2: rc=$RC $OUT"
+
+A=$(plugin alpha 1 "trigger-x-fire-1=1.0 trigger-x-miss-1=0.667" "trigger-x=0.9")
+run "$A"
+[ "$RC" = 0 ] && has "ok    trigger-x	score=0.834	baseline=0.900	(mean of 2 cases)" && ! has "NEW   trigger-x-" \
+    && ok "a group baseline row is compared with the mean of its cases, which are not NEW" || bad "group: rc=$RC $OUT"
+
+A=$(plugin alpha 1 "trigger-x-fire-1=1.0 trigger-x-miss-1=0.5" "trigger-x=0.9")
+run "$A"
+[ "$RC" = 1 ] && has "alpha: trigger-x fell" && ok "a group whose mean is more than 0.1 below falls" || bad "group fall: rc=$RC $OUT"
+
+A=$(plugin alpha 1 "c1=1.0" "c1=1.0 trigger-x=0.9")
+run "$A"
+[ "$RC" = 1 ] && has "alpha: trigger-x fell" && ok "a group row with no member in the run falls" || bad "group missing: rc=$RC $OUT"
+
+A=$(plugin alpha 1 "trigger-x-fire-1=1.0 trigger-x-fire-2=0.0" "trigger-x=0.9 trigger-x-fire-2=0.0")
+run "$A"
+has "ok    trigger-x	score=1.000	baseline=0.900	(mean of 1 cases)" && has "ok    trigger-x-fire-2" \
+    && ok "a case with its own baseline row is not counted in a group" || bad "group exclusion: rc=$RC $OUT"
 
 A=$(plugin alpha 1 "c1=1.0" "c1=1.0")
 rm "$A/stub-result.json"; printf '1\n' >"$A/stub-rc"

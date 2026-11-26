@@ -18,7 +18,11 @@
 #
 # A case FELL when its score is more than 0.1 below its baseline, or when a
 # baseline case has no score in the run (not run, or cut off by the ceiling).
-# A case with no baseline row is reported and never fails the run.
+# A baseline row matching no case name is a group: it is compared with the
+# mean of the run's cases named `<row>-*` that have no baseline row of their
+# own, reported once with the member count, and falls if no member ran.
+# A case with no baseline row and no group is reported and never fails the run.
+# An eval exit of 2 (its --max-cost-usd ceiling reached) fails the run.
 #
 # Options:
 #   --max-cost-usd N  total ceiling across all plugins, USD (default 10). Each
@@ -106,9 +110,21 @@ if result_path:
             s = (c.get("aggregates") or {}).get("score")
             if s is not None:
                 scores[c["name"]] = float(s)
+scores_all = dict(scores)
+groups = {g: [] for g in base if g not in scores}
+for name in [n for n in scores if n not in base]:
+    owners = [g for g in groups if name.startswith(g + "-")]
+    if owners:
+        groups[max(owners, key=len)].append(name)
+        del scores[name]
+for g, members in groups.items():
+    if members:
+        scores[g] = sum(scores_all[m] for m in members) / len(members)
 fell = 0
 for name in sorted(set(base) | set(scores)):
     b, s = base.get(name), scores.get(name)
+    n = len(groups.get(name) or [])
+    tag = f"\t(mean of {n} cases)" if n else ""
     if b is None:
         print(f"  NEW   {name}\tscore={s:.3f}\t(no baseline row)")
     elif s is None:
@@ -116,9 +132,9 @@ for name in sorted(set(base) | set(scores)):
         print(f"  FELL  {name}\tbaseline={b:.3f}\t(no score this run)")
     elif s < b - 0.1 - 1e-9:
         fell += 1
-        print(f"  FELL  {name}\tscore={s:.3f}\tbaseline={b:.3f}")
+        print(f"  FELL  {name}\tscore={s:.3f}\tbaseline={b:.3f}{tag}")
     else:
-        print(f"  ok    {name}\tscore={s:.3f}\tbaseline={b:.3f}")
+        print(f"  ok    {name}\tscore={s:.3f}\tbaseline={b:.3f}{tag}")
 print(f"fell={fell}")
 PY
 }
@@ -179,7 +195,12 @@ for dir in "${PLUGINS[@]}"; do
         cost=$(result_cost "$agg")
         SPENT=$(fadd "$SPENT" "$cost")
         echo "  eval exit=$rc cost=\$$cost (total \$$SPENT of \$$MAX_COST) results=$out"
-        [ "$rc" = 0 ] || [ "$rc" = 2 ] || FAILED+=("$name: eval exited $rc")
+        case "$rc" in
+            0) ;;
+            2) echo "  the eval's \$$remaining ceiling was reached (exit 2); cases may be cut off"
+               FAILED+=("$name: eval exited 2, its \$$remaining --max-cost-usd ceiling was reached") ;;
+            *) FAILED+=("$name: eval exited $rc") ;;
+        esac
         report=$(compare "$baseline" "$agg")
     fi
     printf '%s\n' "$report" | sed '$d'
