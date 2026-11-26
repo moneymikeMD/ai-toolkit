@@ -796,6 +796,21 @@ only with `migrated: true` in its frontmatter.
 
 `--root` works exactly as in `known-issue.sh`: cwd is the default, a set-but-empty or non-git `--root` fails loudly, and every caller should pass it.
 
+## eval-weekly
+
+`scripts/eval-weekly.sh` runs each named plugin checkout's `claude plugin eval` suite under one cost ceiling and compares every case's mean score with that plugin's `evals/results/baseline.tsv`. It is meant for a timer, not CI:
+each run costs tokens.
+
+```bash
+eval-weekly.sh [--max-cost-usd 10] [--state-dir ~/.local/state/skill-evals] [--dry-run] PLUGIN_DIR...
+```
+
+Each plugin runs with `--runs 3 --no-publish --json --ablation none --threshold 0 --trust-plugin`, writing to `<state-dir>/<YYYY-MM-DD>/<plugin>/`. The ceiling is a total: each plugin gets what the earlier ones left,
+and one reached with nothing left is not run. The script exits 1 naming every case more than 0.1 below its baseline, every baseline case with no score this run, and every plugin whose eval failed; a case with no
+baseline row is printed and never fails the run. The script's header records which credential the runs bill.
+
+A suite that cannot run straight from its checkout (night-watchman's needs work-order loaded beside it; see its `evals/README.md`) loads none of its agents, so its cases are expected to fall here until it can (UNVERIFIED: not run with this script).
+
 ## release MCP server
 
 The `release` stdio MCP server (sourced from a private dotfiles repo's
