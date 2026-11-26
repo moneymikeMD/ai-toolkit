@@ -246,6 +246,37 @@ declaring the same `name` under one label is the worst collision there is —
 only the first is reachable — so it is reported by id and path rather than
 deduplicated away.
 
+## agent-skill-lint
+
+Nothing else checks an agent or skill file, so a thinned agent body grows back and a "load the skill" line with no
+`skills:` entry loads the skill only some of the time. This fails a build on:
+
+- `agent-word-cap`: an agent body (the text after its frontmatter) over `agent-word-cap` words (200), unless `allow`
+  maps that agent's path to a non-empty reason.
+- `unbacked-skill-load`: a body that tells the agent to load, read or invoke a named skill (backticked, or a
+  hyphenated or `plugin:` name) that its `skills:` frontmatter does not list.
+- `unknown-skill`: an un-namespaced name in `skills:` that is not a skill under any `skill-roots` directory.
+- `skill-frontmatter`, `skill-name`, `skill-description`, `skill-length`: a `SKILL.md` without `name` and
+  `description`, whose `name` is not its directory, whose description is over 1,024 characters or contains `<` or
+  `>`, or that is over 500 lines.
+
+One line per finding, `path: rule: detail`; exit 1 on any, 2 on a usage error.
+
+```yaml
+- uses: moneymikeMD/ai-toolkit/actions/agent-skill-lint@v1
+  with:
+    agent-roots: agents
+    skill-roots: skills
+    allow: .github/agent-word-cap-allow.json   # {"agents/researcher.md": "why it stays whole"}
+```
+
+The script runs standalone with the same inputs as flags, so a repo's own lint can call it without Actions:
+
+```bash
+python3 actions/agent-skill-lint/agent-skill-lint.py --agent-root agents --skill-root skills [--allow FILE]
+./actions/agent-skill-lint/agent-skill-lint-selftest.sh
+```
+
 ## bar-check
 
 Fails a diff that lowers a quality bar instead of meeting it. An agent that
