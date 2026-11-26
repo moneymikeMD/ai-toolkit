@@ -1732,6 +1732,60 @@ else
   bad "backfill-findings --allow-lower did not rewrite the row (rc=$BF_RC): $BF_OUT"
 fi
 
+# ---- LAB-855: promote? for a much-used script with no selftest beside it --
+PROMO_ROOT="$WORK/promote-root"
+mkdir -p "$PROMO_ROOT/scripts"
+for n in promo-five promo-four promo-tested promo-bats; do
+  printf '#!/bin/bash\n' > "$PROMO_ROOT/scripts/$n.sh"
+done
+printf '#!/bin/bash\n' > "$PROMO_ROOT/scripts/promo-tested-selftest.sh"
+printf '#!/usr/bin/env bats\n' > "$PROMO_ROOT/scripts/promo-bats.bats"
+PROMO_EVENTS="$WORK/events-promote.jsonl"
+python3 - "$PROMO_EVENTS" << 'PYEOF'
+import json, sys
+rows = []
+for script, n in (("promo-five", 5), ("promo-four", 4), ("promo-tested", 5),
+                  ("promo-bats", 5), ("promo-gone", 5)):
+    for i in range(n):
+        rows.append({"ts": "2026-09-0%dT00:00:00Z" % (i + 1), "script": "scripts/%s.sh" % script,
+                     "scripts": ["scripts/%s.sh" % script], "event": "invoke", "cause": "-",
+                     "outcome": "pass", "round": "-", "session": "%s-s%d" % (script, i),
+                     "agent_id": "-", "agent_type": "main", "key": "%s-%d" % (script, i)})
+with open(sys.argv[1], "w") as fh:
+    for r in rows:
+        fh.write(json.dumps(r) + "\n")
+PYEOF
+promo_flag() { printf '%s\n' "$1" | awk -F'\t' -v s="scripts/$2.sh" '$1 == s { print $NF }'; }
+PROMO_OUT=$(run report --events "$PROMO_EVENTS" --usage --root "$PROMO_ROOT" \
+  --until 2026-09-06T00:00:00Z --format tsv) \
+  || { echo "report --usage on the promote fixture failed unexpectedly:" >&2; echo "$PROMO_OUT" >&2; exit 1; }
+[ "$(promo_flag "$PROMO_OUT" promo-five)" = "promote?" ] \
+  && ok "promote?: 5 distinct sessions and no selftest is flagged" \
+  || bad "promote?: promo-five not flagged (got: $PROMO_OUT)"
+[ "$(promo_flag "$PROMO_OUT" promo-four)" = "-" ] \
+  && ok "promote?: 4 distinct sessions stays below the default threshold" \
+  || bad "promote?: promo-four flagged below threshold (got: $PROMO_OUT)"
+[ "$(promo_flag "$PROMO_OUT" promo-tested)" = "-" ] \
+  && ok "promote?: a script with a -selftest.sh beside it is not flagged" \
+  || bad "promote?: promo-tested flagged despite its selftest (got: $PROMO_OUT)"
+[ "$(promo_flag "$PROMO_OUT" promo-bats)" = "-" ] \
+  && ok "promote?: a script with a .bats of the same stem is not flagged" \
+  || bad "promote?: promo-bats flagged despite its .bats (got: $PROMO_OUT)"
+[ "$(promo_flag "$PROMO_OUT" promo-gone)" = "-" ] \
+  && ok "promote?: a script not on disk under --root is not flagged" \
+  || bad "promote?: promo-gone flagged though absent (got: $PROMO_OUT)"
+PROMO_OUT4=$(run report --events "$PROMO_EVENTS" --usage --root "$PROMO_ROOT" \
+  --promote-sessions 4 --until 2026-09-06T00:00:00Z --format tsv) \
+  || { echo "report --usage --promote-sessions 4 failed unexpectedly:" >&2; echo "$PROMO_OUT4" >&2; exit 1; }
+[ "$(promo_flag "$PROMO_OUT4" promo-four)" = "promote?" ] \
+  && ok "promote?: --promote-sessions 4 moves the threshold" \
+  || bad "promote?: --promote-sessions 4 did not flag promo-four (got: $PROMO_OUT4)"
+if run report --events "$PROMO_EVENTS" --usage --promote-sessions 0 >/dev/null 2>&1; then
+  bad "promote?: --promote-sessions 0 was accepted"
+else
+  ok "promote?: --promote-sessions 0 is refused"
+fi
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

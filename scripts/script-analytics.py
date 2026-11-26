@@ -135,8 +135,10 @@ being run, kept as a separate code path from the default `report` table
 (the default output is untouched line-for-line by this feature). Per
 script: invocations/sessions/pass-fail/first-last-used/lint+selftest run
 counts/rework_rounds/lint_wall_clock_s/author_usd/rework_ratio, plus a
-retirement `flag` — see usage_flag() for the exact keep/retire?/flag
-precedence and its day/count thresholds. Only NON-TEST invocations count
+retirement `flag` — see usage_flag() for the exact promote?/keep/retire?/flag
+precedence and its day/count thresholds. `promote?` marks a script run in
+--promote-sessions (default 5) or more distinct sessions that has no
+`<stem>-selftest.sh` or `<stem>.bats` beside it under --root. Only NON-TEST invocations count
 toward any of this: an invoke event with cause "selftest", agent_type
 script-author/script-reviewer, or a session matching one of the script's
 own `author` events (the authoring session) is excluded — see
@@ -2420,12 +2422,32 @@ def load_events(events_path, script_filter, since, until, warnings):
     return events
 
 
+PROMOTE_SESSIONS_DEFAULT = 5
+
+
+def script_has_selftest(root, script):
+    """True when `script` (repo-relative to `root`) has a `<stem>-selftest.sh`
+    or `<stem>.bats` beside it, or when the script itself is not on disk."""
+    path = os.path.join(root, script)
+    if not os.path.isfile(path):
+        return True
+    stem = os.path.splitext(os.path.basename(path))[0]
+    d = os.path.dirname(path)
+    return any(os.path.isfile(os.path.join(d, stem + suffix))
+               for suffix in ("-selftest.sh", ".bats"))
+
+
 # Whether a script is actually being RUN, as opposed to cheap to author. A
 # separate code path so `report`'s default table stays untouched.
-def usage_flag(non_test_invokes, landing_ts, until_ts):
-    """One of "keep" | "retire?" | "flag" | "-", by the following
-    PRECEDENCE (there is no combining of these three independent
+def usage_flag(non_test_invokes, landing_ts, until_ts, has_selftest=True,
+               promote_sessions=PROMOTE_SESSIONS_DEFAULT):
+    """One of "promote?" | "keep" | "retire?" | "flag" | "-", by the
+    following PRECEDENCE (there is no combining of these independent
     thresholds — this is a fixed order):
+      0. Non-test invocations in >=promote_sessions distinct sessions and
+         has_selftest False: "promote?" — the script has earned hardening
+         by use. has_selftest is True for a script not found on disk, so a
+         retired script is never flagged.
       1. >=10 lifetime non-test invocations wins outright as "keep",
          regardless of how recently the script landed.
       2. Otherwise, once >=15 days have elapsed since landing: "retire?"
@@ -2439,6 +2461,10 @@ def usage_flag(non_test_invokes, landing_ts, until_ts):
          passed to judge usage at all.
     landing_ts is None (no author/accepted event on record for this
     script within the queried window) always returns "-"."""
+    sessions = {e.get("session") for e in non_test_invokes
+                if e.get("session") and e.get("session") != "-"}
+    if not has_selftest and len(sessions) >= promote_sessions:
+        return "promote?"
     if landing_ts is None:
         return "-"
     elapsed_days = (until_ts - landing_ts).total_seconds() / 86400.0
@@ -2464,7 +2490,8 @@ def usage_flag(non_test_invokes, landing_ts, until_ts):
     return "-"
 
 
-def build_usage_rows(full_events, until_ts, row_since=None, row_until=None):
+def build_usage_rows(full_events, until_ts, row_since=None, row_until=None,
+                     root=None, promote_sessions=PROMOTE_SESSIONS_DEFAULT):
     """Return (rows, window_rework_ratio) for `report --usage`.
 
     `full_events` MUST be the events file's FULL contents, unfiltered by
@@ -2609,7 +2636,9 @@ def build_usage_rows(full_events, until_ts, row_since=None, row_until=None):
             landing_ts_str = author_ts_list[0] if author_ts_list else None
         landing_ts = parse_iso(landing_ts_str, "ts") if landing_ts_str else None
 
-        flag = usage_flag(lifetime_non_test_invokes, landing_ts, until_ts)
+        has_selftest = script_has_selftest(root, script) if root else True
+        flag = usage_flag(lifetime_non_test_invokes, landing_ts, until_ts,
+                          has_selftest, promote_sessions)
 
         rows.append([
             script, invocations, sessions, passes, fails, first_used, last_used,
@@ -2708,6 +2737,19 @@ def build_ticket_cost_rows(full_events, since, until):
     return rows
 
 
+def usage_root(root):
+    """The repo `report --usage` looks for selftests in: --root, else the
+    git toplevel of the current directory, else the current directory."""
+    if root:
+        return os.path.abspath(root)
+    try:
+        out = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, check=True)
+        return out.stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return os.getcwd()
+
+
 def cmd_report(args):
     since = parse_iso(args.since, "--since") if args.since else None
     until = parse_iso(args.until, "--until") if args.until else None
@@ -2718,7 +2760,10 @@ def cmd_report(args):
         # the FULL file for lifetime counts, so the window is a row filter only.
         full_events = load_events(args.events, args.script, None, None, warnings)
         until_ts = until or datetime.now(timezone.utc)
-        rows, window_ratio = build_usage_rows(full_events, until_ts, since, until)
+        if args.promote_sessions < 1:
+            sys.exit("error: --promote-sessions must be at least 1")
+        rows, window_ratio = build_usage_rows(full_events, until_ts, since, until,
+                                              usage_root(args.root), args.promote_sessions)
         headers = [
             "script", "invocations", "sessions", "pass", "fail",
             "first_used", "last_used", "lint_runs", "selftest_runs",
@@ -2915,6 +2960,13 @@ def parse_args(argv):
                            help="print the per-script usage table (invocations, pass/fail, "
                                 "lint/selftest/rework counts, rework_ratio, retirement flag) "
                                 "instead of the default author/review/lint report")
+    p_report.add_argument("--promote-sessions", type=int, default=PROMOTE_SESSIONS_DEFAULT,
+                           dest="promote_sessions",
+                           help="--usage: distinct sessions at which a script with no selftest "
+                                "beside it is flagged promote? (default %d)" % PROMOTE_SESSIONS_DEFAULT)
+    p_report.add_argument("--root", default=None,
+                           help="--usage: repo the scripts' paths are relative to, for the "
+                                "selftest check (default: git toplevel of the current directory)")
 
     p_status = sub.add_parser("status-durations",
                                help="derive status_duration events from the tracker's changelog")
