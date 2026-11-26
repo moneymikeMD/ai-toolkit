@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.13.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.12.0...v1.13.0) (2026-11-26)
+
+
+### Features
+
+* **agent-skill-lint:** lint agent bodies and SKILL.md files (NWM-253) ([#90](https://github.com/moneymikeMD/ai-toolkit/issues/90)) ([0a18b81](https://github.com/moneymikeMD/ai-toolkit/commit/0a18b815bd06d9acad4051d78d68798e7870e94a))
+* **script-analytics:** flag a much-used script with no selftest as promote? (LAB-855) ([#89](https://github.com/moneymikeMD/ai-toolkit/issues/89)) ([26e5910](https://github.com/moneymikeMD/ai-toolkit/commit/26e59105a2198f5275b45de5169b31f93187654e))
+
 ## [1.12.0](https://github.com/moneymikeMD/ai-toolkit/compare/v1.11.1...v1.12.0) (2026-11-08)
 
 
