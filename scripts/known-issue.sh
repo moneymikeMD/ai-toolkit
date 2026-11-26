@@ -7,49 +7,29 @@
 # never contacts a host and reads no credential.
 #
 # Subcommands:
-#   migrate                    ONE-SHOT. Split the hand-written
-#                               docs/known-issues.md into one file per entry
-#                               under docs/known-issues/, then regenerate the
-#                               index. Heading detection is CommonMark
-#                               fence-aware and cross-checked against two
-#                               differently-shaped implementations. Entries
-#                               are staged and verified ENTIRELY FROM DISK
-#                               before going live, so a failure leaves the
-#                               real docs/known-issues/ untouched.
-#                               Refuses a second run unless the directory is
-#                               empty or --force is given, which additionally
-#                               requires every existing entry to match its
-#                               recorded sha256. A heading with no severity is
-#                               never guessed at: every one is printed with
-#                               its line number unless --accept-severity
-#                               -defaults is given, which defaults them LOW.
-#   reindex                    Regenerate docs/known-issues.md from the
-#                               frontmatter of every file under
-#                               docs/known-issues/. Idempotent — running it
-#                               twice with no entry changes produces a
-#                               byte-identical file.
+#   migrate                    ONE-SHOT. Split the hand-written index into one
+#                               file per entry; see `migrate --help`.
+#   reindex                    Regenerate docs/known-issues.md from the entries'
+#                               frontmatter. Idempotent.
 #   add                        Create a new entry file and reindex.
-#   resolve <slug>              Mark an entry resolved (status + date) and
-#                               reindex.
-#   severity <slug> <SEV>       Change an entry's severity and reindex.
-#   remanifest <slug>...        Re-record the sha256 of the named entries, so
-#                               a lint that failed on drift can be made green
-#                               deliberately. Per-slug and printed; no --all,
-#                               because acceptance must be an act and not a
-#                               rubber stamp. Touches only _manifest.json: it
-#                               never rewrites an entry and never reindexes.
-#   remanifest --drop <slug>... Drop the record of an entry whose file is
-#                               GONE. Separate because it is a delete: it
-#                               refuses a slug whose file is still there, and
-#                               re-recording refuses one whose file is not.
-#   lint                        Verify every entry parses, has the required
-#                               frontmatter and a unique slug, still matches
-#                               its sha256 in _manifest.json, and that
-#                               docs/known-issues.md is exactly what
-#                               `reindex` would produce. Non-zero on any
-#                               failure; the check CI runs on every push. A
-#                               manifest failure names `remanifest` as the
-#                               way back to green.
+#   remove <slug>              Close a fixed entry, once its facts live in the
+#                               docs: `git rm` it, drop its record, reindex.
+#                               Refuses an entry with uncommitted changes.
+#                               Commits nothing.
+#   resolve <slug>             Keep the entry but mark it resolved. Not how a
+#                               fixed entry is closed; use `remove`.
+#   severity <slug> <SEV>      Change an entry's severity and reindex.
+#   remanifest <slug>...       Re-record the sha256 of the named entries after
+#                               an intended hand edit. No --all; touches only
+#                               _manifest.json.
+#   remanifest --drop <slug>... Drop the record of an entry whose file is GONE.
+#   lint                       Verify entries, manifest and index agree.
+#                               Non-zero on any failure; the check CI runs.
+#
+# The three steps `remove` runs, for doing them by hand:
+#   git rm docs/known-issues/<slug>.md
+#   known-issue.sh remanifest --drop <slug> --root <repo>
+#   known-issue.sh reindex --root <repo>
 #
 # Every subcommand answers -h/--help on its own; run with no arguments for
 # the same text this comment carries.
@@ -183,6 +163,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -282,7 +263,7 @@ GENERATED_HEADER = """# Known issues
 **GENERATED — do not hand-edit.** This file is produced by
 `known-issue.sh reindex` from the frontmatter of every file in
 `docs/known-issues/`. Edit an entry there (or via `known-issue.sh add`,
-`resolve`, or `severity`), then run `reindex` — or just run any of those
+`remove`, or `severity`), then run `reindex` — or just run any of those
 subcommands, which reindex for you. `known-issue.sh lint` fails if this file
 ever drifts from what `reindex` would produce.
 
@@ -290,8 +271,7 @@ ever drifts from what `reindex` would produce.
 
 TRAILING_NOTE = (
     "Severity is about blast radius if the thing goes wrong, not effort to "
-    "fix. Anything resolved is rewritten in place with what was verified, "
-    "rather than deleted — the history is often the useful part.\n"
+    "fix. A fixed entry is deleted once its facts live in the docs.\n"
 )
 
 
@@ -1477,7 +1457,8 @@ def cmd_lint(args):
     if err is not None:
         print("Error: " + err, file=sys.stderr)
         return 1
-    if not entries:
+    # An empty manifest means every entry was removed on purpose.
+    if not entries and load_manifest(args.entries_dir) != {}:
         print("Error: no entries found in %s" % args.entries_dir, file=sys.stderr)
         return 1
     manifest_errors = check_manifest(args.entries_dir, entries)
@@ -1617,6 +1598,30 @@ def cmd_resolve(args):
     return cmd_reindex(args)
 
 
+def cmd_remove(args):
+    if not validate_slug_arg(args.slug):
+        return 1
+    # Checked before deleting, so a broken sibling cannot strand a half-removal.
+    _, err = load_all_entries_safe(args.entries_dir)
+    if err is not None:
+        print("Error: " + err, file=sys.stderr)
+        return 1
+    manifest = load_manifest(args.entries_dir)
+    if subprocess.call(["git", "-C", args.entries_dir, "rm", "-q", "--",
+                        args.slug + ".md"]) != 0:
+        print("Error: git rm refused %s; nothing changed. Commit the entry "
+              "first, so its text survives in history." % args.slug,
+              file=sys.stderr)
+        return 1
+    os.makedirs(args.entries_dir, exist_ok=True)
+    if manifest is not None:
+        manifest.pop(args.slug, None)
+        save_manifest(args.entries_dir, manifest)
+    print("Removed %s; commit docs/known-issues and docs/known-issues.md "
+          "together" % args.slug)
+    return cmd_reindex(args)
+
+
 def cmd_severity(args):
     if not validate_slug_arg(args.slug):
         return 1
@@ -1667,6 +1672,10 @@ def main():
     r.add_argument("--date", required=True)
     r.add_argument("--note")
 
+    d = sub.add_parser("remove")
+    common(d)
+    d.add_argument("--slug", required=True)
+
     s = sub.add_parser("severity")
     common(s)
     s.add_argument("--slug", required=True)
@@ -1681,7 +1690,7 @@ def main():
     fn = {
         "migrate": cmd_migrate, "reindex": cmd_reindex, "lint": cmd_lint,
         "add": cmd_add, "resolve": cmd_resolve, "severity": cmd_severity,
-        "remanifest": cmd_remanifest,
+        "remanifest": cmd_remanifest, "remove": cmd_remove,
     }[args.cmd]
     return fn(args)
 
@@ -1803,12 +1812,29 @@ usage_resolve() {
     cat <<EOF
 Usage: known-issue.sh resolve <slug> [--date YYYY-MM-DD] [--note NOTE]
 
-Marks an existing entry resolved and reindexes.
+Keeps the entry, marked resolved, and reindexes. This is not how a fixed
+entry is closed: use \`remove\` once its facts live in the docs.
 
   <slug>             required; the entry's filename under docs/known-issues/
                      without the .md suffix
   --date DATE        resolved date, YYYY-MM-DD (default: today)
   --note NOTE        replaces the entry's index-row note
+EOF
+    exit 0
+}
+
+usage_remove() {
+    cat <<EOF
+Usage: known-issue.sh remove <slug> [--root PATH]
+
+Closes a fixed entry, once its facts live in the docs: \`git rm\`s the file,
+drops its _manifest.json record and reindexes. Refuses an entry with
+uncommitted changes. Commits nothing.
+
+The same by hand:
+  git rm docs/known-issues/<slug>.md
+  known-issue.sh remanifest --drop <slug> --root <repo>
+  known-issue.sh reindex --root <repo>
 EOF
     exit 0
 }
@@ -1833,7 +1859,7 @@ case "$1" in
 esac
 
 CMD="$1"; shift
-known_command "$CMD" migrate reindex add resolve severity lint remanifest \
+known_command "$CMD" migrate reindex add resolve remove severity lint remanifest \
     || die "unknown subcommand: $CMD (try --help)"
 
 case "$CMD" in
@@ -1964,6 +1990,18 @@ case "$CMD" in
                      --slug "$SLUG" --date "$DATE")
         [ -n "$NOTE" ] && ENGINE_ARGS+=(--note "$NOTE")
         run_engine "${ENGINE_ARGS[@]}"
+        ;;
+
+    remove)
+        [ $# -ge 1 ] || die "remove: name a slug"
+        case "$1" in -h|--help) usage_remove ;; esac
+        SLUG="$1"; shift
+        [ $# -eq 0 ] || die "remove: unknown option: $1 (try --help)"
+        valid_slug_shape "$SLUG" || die "remove: not a valid slug (want lowercase letters/digits/hyphens, no leading/trailing/doubled hyphen): $SLUG"
+        valid_slug "$SLUG" || die "remove: no such entry: $SLUG (no $ENTRIES_DIR/$SLUG.md)"
+
+        run_engine remove --entries-dir "$ENTRIES_DIR" --index-file "$INDEX_FILE" \
+            --slug "$SLUG"
         ;;
 
     severity)
