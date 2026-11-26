@@ -771,6 +771,44 @@ else
 $(printf '%s\n' "$MIG_SNAPSHOT_AFTER" | sed 's/^/       /')"
 fi
 
+RM=$(fresh_repo remove-repo)
+rmki() { (cd "$RM" && ./scripts/known-issue.sh "$@"); }
+rmki add --title "Keeper" --severity LOW --body b >/dev/null
+rmki add --title "Goner" --severity LOW --body b >/dev/null
+
+if grep -q "A fixed entry is deleted once its facts live in the docs" "$RM/docs/known-issues.md" \
+    && ! grep -q "rather than deleted" "$RM/docs/known-issues.md"; then
+    ok "footer: says a fixed entry is deleted"
+else
+    bad "footer: the index does not say a fixed entry is deleted"
+fi
+
+if ! rmki remove goner >"$WORK/rm0.out" 2>&1 && [ -f "$RM/docs/known-issues/goner.md" ]; then
+    ok "remove: refuses an uncommitted entry and leaves it in place"
+else
+    bad "remove: did not refuse an uncommitted entry:
+$(cat "$WORK/rm0.out")"
+fi
+
+git -C "$RM" add -A && git -C "$RM" commit -qm entries
+if rmki remove goner >"$WORK/rm1.out" 2>&1 \
+    && [ ! -e "$RM/docs/known-issues/goner.md" ] \
+    && ! grep -q goner "$RM/docs/known-issues.md" "$RM/docs/known-issues/_manifest.json" \
+    && rmki lint >>"$WORK/rm1.out" 2>&1; then
+    ok "remove: deletes the entry, its record and its index row, and lint stays green"
+else
+    bad "remove: did not leave a clean corpus:
+$(cat "$WORK/rm1.out")"
+fi
+
+git -C "$RM" add -A && git -C "$RM" commit -qm one-gone
+if rmki remove keeper >"$WORK/rm2.out" 2>&1 && rmki lint >>"$WORK/rm2.out" 2>&1; then
+    ok "remove: removing the last entry leaves lint green"
+else
+    bad "remove: the last entry's removal left lint red:
+$(cat "$WORK/rm2.out")"
+fi
+
 echo
 echo "$PASS passed, $FAIL failed (against: $KNOWN_ISSUE)"
 [ "$FAIL" -eq 0 ]

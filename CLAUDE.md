@@ -64,7 +64,7 @@ records the constraints a session must not violate.
 
 ### `known-issue.sh`
 
-Manages a repo's `docs/known-issues/` entries and the generated `docs/known-issues.md` index. Subcommands: `add`, `lint`, `reindex`, `remanifest`, `resolve`, `severity`, `migrate`. `lint` is the drift
+Manages a repo's `docs/known-issues/` entries and the generated `docs/known-issues.md` index. Subcommands: `add`, `lint`, `reindex`, `remanifest`, `remove`, `resolve`, `severity`, `migrate`. A fixed entry is closed with `remove`, not `resolve`. `lint` is the drift
 gate a consumer runs in CI: it fails any entry whose sha256 no longer matches `_manifest.json`. `remanifest <slug>...` re-records the named hashes and `remanifest --drop <slug>...` removes the record
 of a file that is gone; both refuse the other's case and write nothing unless every named slug is valid. There is deliberately no `--all`: accepting a drifted entry is an act, not a rubber stamp.
 Never hand-edit `_manifest.json`; that is the edit class `lint` exists to catch.
